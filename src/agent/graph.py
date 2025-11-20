@@ -37,14 +37,18 @@ from agent.agents.utils.hummingbot import (
     fetch_current_price,
     fetch_market_data,
     fetch_price_history,
+    fetch_price_history_htf,
+    fetch_price_history_tf,
+    fetch_price_history_ltf,
 )
 
 # Cache for hummingbot client initialization
 _hummingbot_client_cache = None
 
+
 async def get_hummingbot_client():
     """Get or initialize hummingbot client (cached).
-    
+
     Returns:
         Initialized HummingbotAPIClient or None if unavailable.
     """
@@ -55,7 +59,7 @@ async def get_hummingbot_client():
         except Exception as e:
             print(f"⚠️  Hummingbot initialization failed: {e}")
             _hummingbot_client_cache = False  # Mark as failed to avoid retries
-    
+
     return _hummingbot_client_cache if _hummingbot_client_cache is not False else None
 
 
@@ -83,7 +87,7 @@ async def system_initialization_node(state: TradingState) -> TradingState:
 
     # Get or initialize Hummingbot client (cached)
     hummingbot_client = await get_hummingbot_client()
-    
+
     # Build configuration from environment and defaults with Hummingbot client
     config = get_system_initialization_config(hummingbot_client=hummingbot_client)
 
@@ -162,94 +166,112 @@ def risk_management_node(state: TradingState) -> TradingState:
 
 
 async def market_structure_node(state: TradingState) -> TradingState:
-     """Analyze market structure to identify support/resistance zones and trends.
+    """Analyze market structure to identify support/resistance zones and trends.
 
-     Uses swing point detection and zone identification to establish the
-     foundational structural framework before trend and strength analysis.
-     """
-     print("🟡 Market Structure Node")
+    Uses swing point detection and zone identification to establish the
+    foundational structural framework before trend and strength analysis.
+    Fetches price history across HTF (4H), TF (15m), and LTF (5m) timeframes.
+    """
+    print("🟡 Market Structure Node")
 
-     # Get Hummingbot client for market data
-     hummingbot_client = await get_hummingbot_client()
-     
-     # Fetch real market data from Hummingbot
-     trading_pair = "ETH-USDT"
-     current_price = await fetch_current_price(hummingbot_client, trading_pair)
-     price_history = await fetch_price_history(
-         hummingbot_client, trading_pair, interval="4h", limit=100
-     )
+    # Get Hummingbot client for market data
+    hummingbot_client = await get_hummingbot_client()
 
-     # Convert price_history to OHLC data format expected by MarketStructure
-     ohlc_data = []
-     for bar_data in price_history:
-         ohlc_data.append({
-             "open": bar_data.get("open", 0.0),
-             "high": bar_data.get("high", 0.0),
-             "low": bar_data.get("low", 0.0),
-             "close": bar_data.get("close", 0.0),
-             "volume": bar_data.get("volume", 0),
-         })
+    # Fetch real market data from Hummingbot
+    trading_pair = "ETH-USDT"
+    current_price = await fetch_current_price(hummingbot_client, trading_pair)
+    
+    # Fetch price history across three timeframes
+    # HTF (4H): 50 candles = ~8 days for structural support/resistance
+    # TF (15m): 100 candles = ~25 hours for trend confirmation
+    # LTF (5m): 100 candles = ~8 hours for entry setup and price action
+    price_history_htf = await fetch_price_history_htf(hummingbot_client, trading_pair, limit=50)
+    price_history_tf = await fetch_price_history_tf(hummingbot_client, trading_pair, limit=100)
+    price_history_ltf = await fetch_price_history_ltf(hummingbot_client, trading_pair, limit=100)
 
-     # Instantiate and execute the market structure agent
-     agent = MarketStructure(
-         config={
-             "instrument": trading_pair,
-             "timeframe": "4H",
-             "lookback_periods": len(ohlc_data),
-             "current_price": current_price,
-             "ohlc_data": ohlc_data,
-             "min_swing_bars": 3,
-             "sr_zone_thickness_pct": 0.5,
-         }
-     )
-     result = agent.execute()
+    # Convert HTF price_history to OHLC data format expected by MarketStructure
+    ohlc_data = []
+    for bar_data in price_history_htf:
+        ohlc_data.append(
+            {
+                "open": bar_data.get("open", 0.0),
+                "high": bar_data.get("high", 0.0),
+                "low": bar_data.get("low", 0.0),
+                "close": bar_data.get("close", 0.0),
+                "volume": bar_data.get("volume", 0),
+            }
+        )
 
-     # Extract structural framework and context
-     structural_framework = result.get("structural_framework", {})
-     current_context = result.get("current_context", {})
+    # Instantiate and execute the market structure agent
+    agent = MarketStructure(
+        config={
+            "instrument": trading_pair,
+            "timeframe": "4H",
+            "lookback_periods": len(ohlc_data),
+            "current_price": current_price,
+            "ohlc_data": ohlc_data,
+            "min_swing_bars": 3,
+            "sr_zone_thickness_pct": 0.5,
+        }
+    )
+    result = agent.execute()
 
-     # Update state with market structure analysis
-     state["messages"].append(
-         {
-             "node": "market_structure",
-             "analysis_complete": result.get("analysis_complete", False),
-             "instrument": trading_pair,
-             "current_price": current_price,
-             "price_location": current_context.get("price_location", "unknown"),
-             "trend_structure": str(structural_framework.get("trend_structure", "sideways")),
-             "nearest_support": current_context.get("nearest_support", 0.0),
-             "nearest_resistance": current_context.get("nearest_resistance", 0.0),
-             "support_zones_count": len(structural_framework.get("support_zones", [])),
-             "resistance_zones_count": len(structural_framework.get("resistance_zones", [])),
-         }
-     )
+    # Extract structural framework and context
+    structural_framework = result.get("structural_framework", {})
+    current_context = result.get("current_context", {})
 
-     # Store structural data in market_data for downstream nodes
-     state["market_data"] = {
-         "instrument": trading_pair,
-         "current_price": current_price,
-         "price_location": current_context.get("price_location", "unknown"),
-         "support": current_context.get("nearest_support", 0.0),
-         "resistance": current_context.get("nearest_resistance", 0.0),
-         "distance_to_support_pct": current_context.get("distance_to_support_pct", 0.0),
-         "distance_to_resistance_pct": current_context.get("distance_to_resistance_pct", 0.0),
-         "trend": str(structural_framework.get("trend_structure", "sideways")).lower(),
-         "structural_framework": structural_framework,
-         "current_context": current_context,
-         "price_history": price_history,
-     }
+    # Update state with market structure analysis
+    state["messages"].append(
+        {
+            "node": "market_structure",
+            "analysis_complete": result.get("analysis_complete", False),
+            "instrument": trading_pair,
+            "current_price": current_price,
+            "price_location": current_context.get("price_location", "unknown"),
+            "trend_structure": str(
+                structural_framework.get("trend_structure", "sideways")
+            ),
+            "nearest_support": current_context.get("nearest_support", 0.0),
+            "nearest_resistance": current_context.get("nearest_resistance", 0.0),
+            "support_zones_count": len(structural_framework.get("support_zones", [])),
+            "resistance_zones_count": len(
+                structural_framework.get("resistance_zones", [])
+            ),
+        }
+    )
 
-     # Log market structure analysis
-     trend_str = str(structural_framework.get("trend_structure", "sideways"))
-     support = current_context.get("nearest_support", 0.0)
-     resistance = current_context.get("nearest_resistance", 0.0)
-     location = current_context.get("price_location", "unknown")
-     print(
-         f"  📊 Trend: {trend_str.upper()} | Support: {support:.2f} | Resistance: {resistance:.2f}"
-     )
-     print(f"     Price Location: {location} | Distance to R: {current_context.get('distance_to_resistance_pct', 0.0):.2f}%")
+    # Store structural data in market_data for downstream nodes
+    state["market_data"] = {
+        "instrument": trading_pair,
+        "current_price": current_price,
+        "price_location": current_context.get("price_location", "unknown"),
+        "support": current_context.get("nearest_support", 0.0),
+        "resistance": current_context.get("nearest_resistance", 0.0),
+        "distance_to_support_pct": current_context.get("distance_to_support_pct", 0.0),
+        "distance_to_resistance_pct": current_context.get(
+            "distance_to_resistance_pct", 0.0
+        ),
+        "trend": str(structural_framework.get("trend_structure", "sideways")).lower(),
+        "structural_framework": structural_framework,
+        "current_context": current_context,
+        "price_history_htf": price_history_htf,
+        "price_history_tf": price_history_tf,
+        "price_history_ltf": price_history_ltf,
+    }
 
-     return state
+    # Log market structure analysis
+    trend_str = str(structural_framework.get("trend_structure", "sideways"))
+    support = current_context.get("nearest_support", 0.0)
+    resistance = current_context.get("nearest_resistance", 0.0)
+    location = current_context.get("price_location", "unknown")
+    print(
+        f"  📊 Trend: {trend_str.upper()} | Support: {support:.2f} | Resistance: {resistance:.2f}"
+    )
+    print(
+        f"     Price Location: {location} | Distance to R: {current_context.get('distance_to_resistance_pct', 0.0):.2f}%"
+    )
+
+    return state
 
 
 def economic_calendar_node(state: TradingState) -> TradingState:
@@ -310,174 +332,214 @@ def economic_calendar_node(state: TradingState) -> TradingState:
 
 
 def trend_definition_node(state: TradingState) -> TradingState:
-     """Define and confirm market trend using YTC swing analysis.
+    """Define and confirm market trend using YTC swing analysis.
 
-     Identifies trend direction (uptrend/downtrend/sideways), swing structure,
-     and validates against higher timeframe bias.
-     """
-     print("🟡 Trend Definition Node")
+    Identifies trend direction (uptrend/downtrend/sideways), swing structure,
+    and validates against higher timeframe bias. Uses TF (15m) for trend analysis.
+    """
+    print("🟡 Trend Definition Node")
 
-     # Build bars from price history
-     price_history = state["market_data"].get("price_history", [])
-     bars = []
-     for bar_data in price_history:
-         bars.append({
-             "high": bar_data.get("high", 0.0),
-             "low": bar_data.get("low", 0.0),
-             "close": bar_data.get("close", 0.0),
-             "timestamp": bar_data.get("timestamp", ""),
-         })
+    # Build bars from TF price history (15m)
+    price_history_tf = state["market_data"].get("price_history_tf", [])
+    bars = []
+    for bar_data in price_history_tf:
+        bars.append(
+            {
+                "high": bar_data.get("high", 0.0),
+                "low": bar_data.get("low", 0.0),
+                "close": bar_data.get("close", 0.0),
+                "timestamp": bar_data.get("timestamp", ""),
+            }
+        )
 
-     # Instantiate and execute the trend definition agent
-     agent = TrendDefinition(
-         config={
-             "market_data": {
-                 "bars": bars,
-                 "symbol": "ETH-USDT",
-                 "timeframe": "15m",
-             },
-             "higher_timeframe_context": {
-                 "htf_timeframe": "4h",
-                 "htf_trend_direction": state["market_data"].get("trend", "sideways"),
-                 "htf_resistance": state["market_data"].get("resistance", 0.0),
-                 "htf_support": state["market_data"].get("support", 0.0),
-                 "htf_swing_high": state["market_data"].get("key_levels", {}).get("swing_high", 0.0),
-                 "htf_swing_low": state["market_data"].get("key_levels", {}).get("swing_low", 0.0),
-             }
-         }
-     )
-     result = agent.execute()
+    # Instantiate and execute the trend definition agent
+    agent = TrendDefinition(
+        config={
+            "market_data": {
+                "bars": bars,
+                "symbol": "ETH-USDT",
+                "timeframe": "15m",
+            },
+            "higher_timeframe_context": {
+                "htf_timeframe": "4h",
+                "htf_trend_direction": state["market_data"].get("trend", "sideways"),
+                "htf_resistance": state["market_data"].get("resistance", 0.0),
+                "htf_support": state["market_data"].get("support", 0.0),
+                "htf_swing_high": state["market_data"]
+                .get("key_levels", {})
+                .get("swing_high", 0.0),
+                "htf_swing_low": state["market_data"]
+                .get("key_levels", {})
+                .get("swing_low", 0.0),
+            },
+        }
+    )
+    result = agent.execute()
 
-     # Extract trend analysis
-     trend_analysis = result.get("trend_analysis", {})
-     swing_structure = result.get("swing_structure", {})
-     structure_integrity = result.get("structure_integrity", {})
-     htf_alignment = result.get("htf_alignment", {})
+    # Extract trend analysis
+    trend_analysis = result.get("trend_analysis", {})
+    swing_structure = result.get("swing_structure", {})
+    structure_integrity = result.get("structure_integrity", {})
+    htf_alignment = result.get("htf_alignment", {})
 
-     # Update state with trend definition
-     state["messages"].append(
-         {
-             "node": "trend_definition",
-             "direction": trend_analysis.get("direction", "sideways"),
-             "confidence": trend_analysis.get("confidence", 0.0),
-             "strength_rating": trend_analysis.get("strength_rating", "weak"),
-             "swing_highs_count": len(swing_structure.get("swing_highs", [])),
-             "swing_lows_count": len(swing_structure.get("swing_lows", [])),
-             "structure_intact": structure_integrity.get("structure_intact", True),
-             "htf_aligned": htf_alignment.get("tf_trend_aligns_with_htf", True),
-         }
-     )
+    # Update state with trend definition
+    state["messages"].append(
+        {
+            "node": "trend_definition",
+            "direction": trend_analysis.get("direction", "sideways"),
+            "confidence": trend_analysis.get("confidence", 0.0),
+            "strength_rating": trend_analysis.get("strength_rating", "weak"),
+            "swing_highs_count": len(swing_structure.get("swing_highs", [])),
+            "swing_lows_count": len(swing_structure.get("swing_lows", [])),
+            "structure_intact": structure_integrity.get("structure_intact", True),
+            "htf_aligned": htf_alignment.get("tf_trend_aligns_with_htf", True),
+        }
+    )
 
-     # Store trend data for downstream nodes
-     state["market_data"]["trend_analysis"] = trend_analysis
-     state["market_data"]["swing_structure"] = swing_structure
-     state["market_data"]["structure_integrity"] = structure_integrity
-     state["market_data"]["htf_alignment"] = htf_alignment
+    # Store trend data for downstream nodes
+    state["market_data"]["trend_analysis"] = trend_analysis
+    state["market_data"]["swing_structure"] = swing_structure
+    state["market_data"]["structure_integrity"] = structure_integrity
+    state["market_data"]["htf_alignment"] = htf_alignment
 
-     # Log trend definition
-     direction = trend_analysis.get("direction", "sideways")
-     strength = trend_analysis.get("strength_rating", "weak")
-     confidence = trend_analysis.get("confidence", 0.0)
-     print(
-         f"  📈 Trend: {direction.upper()} | Strength: {strength} | Confidence: {confidence}"
-     )
-     if structure_integrity.get("reversal_warning"):
-         print(f"  ⚠️  Reversal warning: {structure_integrity.get('structure_break_description', '')}")
+    # Log trend definition
+    direction = trend_analysis.get("direction", "sideways")
+    strength = trend_analysis.get("strength_rating", "weak")
+    confidence = trend_analysis.get("confidence", 0.0)
+    print(
+        f"  📈 Trend: {direction.upper()} | Strength: {strength} | Confidence: {confidence}"
+    )
+    if structure_integrity.get("reversal_warning"):
+        print(
+            f"  ⚠️  Reversal warning: {structure_integrity.get('structure_break_description', '')}"
+        )
 
-     return state
+    return state
 
 
 def strength_weakness_node(state: TradingState) -> TradingState:
-     """Analyze market strength and weakness using YTC price action.
+    """Analyze market strength and weakness using YTC price action.
 
-     Analyzes momentum (bar acceleration, close position), projection (swing extension),
-     and depth (pullback retracement) to assess move conviction and identify setups.
-     """
-     print("🟡 Strength/Weakness Node")
+    Analyzes momentum (bar acceleration, close position), projection (swing extension),
+    and depth (pullback retracement) to assess move conviction and identify setups.
+    Uses LTF (5m) price history for detailed bar analysis.
+    """
+    print("🟡 Strength/Weakness Node")
 
-     # Build bar data from price history
-     price_history = state["market_data"].get("price_history", [])
-     bars = []
-     for bar_data in price_history[-20:]:  # Last 20 bars for analysis
-         bars.append({
-             "open": bar_data.get("open", 0.0),
-             "high": bar_data.get("high", 0.0),
-             "low": bar_data.get("low", 0.0),
-             "close": bar_data.get("close", 0.0),
-             "body_size": abs(bar_data.get("close", 0.0) - bar_data.get("open", 0.0)),
-             "bar_range": bar_data.get("high", 0.0) - bar_data.get("low", 0.0),
-         })
+    # Build bar data from LTF price history (5m)
+    price_history_ltf = state["market_data"].get("price_history_ltf", [])
+    bars = []
+    for bar_data in price_history_ltf[-20:]:  # Last 20 bars for analysis
+        bars.append(
+            {
+                "open": bar_data.get("open", 0.0),
+                "high": bar_data.get("high", 0.0),
+                "low": bar_data.get("low", 0.0),
+                "close": bar_data.get("close", 0.0),
+                "body_size": abs(
+                    bar_data.get("close", 0.0) - bar_data.get("open", 0.0)
+                ),
+                "bar_range": bar_data.get("high", 0.0) - bar_data.get("low", 0.0),
+            }
+        )
 
-     # Get trend analysis from previous node
-     trend_analysis = state["market_data"].get("trend_analysis", {})
-     trend_direction = str(trend_analysis.get("direction", "sideways")).lower().replace("trend", "").strip()
-     if "up" in trend_direction:
-         trend_direction = "up"
-     elif "down" in trend_direction:
-         trend_direction = "down"
-     else:
-         trend_direction = "sideways"
+    # Get trend analysis from previous node
+    trend_analysis = state["market_data"].get("trend_analysis", {})
+    trend_direction = (
+        str(trend_analysis.get("direction", "sideways"))
+        .lower()
+        .replace("trend", "")
+        .strip()
+    )
+    if "up" in trend_direction:
+        trend_direction = "up"
+    elif "down" in trend_direction:
+        trend_direction = "down"
+    else:
+        trend_direction = "sideways"
 
-     # Instantiate and execute the strength and weakness agent
-     swing_structure = state["market_data"].get("swing_structure", {})
-     current_swing_high = swing_structure.get("current_leading_swing_high", 0.0)
-     
-     agent = StrengthWeakness(
-         config={
-             "trend_data": {
-                 "direction": "up" if trend_direction == "uptrend" else "down" if trend_direction == "downtrend" else "neutral",
-                 "current_swing": {"price": current_swing_high} if isinstance(current_swing_high, (int, float)) else current_swing_high,
-                 "prior_swings": swing_structure.get("swing_highs", [])[:3] if isinstance(swing_structure.get("swing_highs", []), list) else [],
-             },
-             "bar_data": {
-                 "current_bars": bars,
-                 "lookback_bars": len(bars),
-             },
-             "support_resistance": {
-                 "approaching_sr_level": state["market_data"].get("resistance", 0.0) if trend_direction == "up" else state["market_data"].get("support", 0.0),
-                 "level_type": "resistance" if trend_direction == "up" else "support",
-             }
-         }
-     )
-     result = agent.execute()
+    # Instantiate and execute the strength and weakness agent
+    swing_structure = state["market_data"].get("swing_structure", {})
+    current_swing_high = swing_structure.get("current_leading_swing_high", 0.0)
 
-     # Extract strength analysis
-     strength_analysis = result.get("strength_analysis", {})
-     weakness_signals = result.get("weakness_signals", {})
-     setup_applicability = result.get("setup_applicability", {})
+    agent = StrengthWeakness(
+        config={
+            "trend_data": {
+                "direction": "up"
+                if trend_direction == "uptrend"
+                else "down"
+                if trend_direction == "downtrend"
+                else "neutral",
+                "current_swing": {"price": current_swing_high}
+                if isinstance(current_swing_high, (int, float))
+                else current_swing_high,
+                "prior_swings": swing_structure.get("swing_highs", [])[:3]
+                if isinstance(swing_structure.get("swing_highs", []), list)
+                else [],
+            },
+            "bar_data": {
+                "current_bars": bars,
+                "lookback_bars": len(bars),
+            },
+            "support_resistance": {
+                "approaching_sr_level": state["market_data"].get("resistance", 0.0)
+                if trend_direction == "up"
+                else state["market_data"].get("support", 0.0),
+                "level_type": "resistance" if trend_direction == "up" else "support",
+            },
+        }
+    )
+    result = agent.execute()
 
-     # Update state with strength/weakness analysis
-     state["messages"].append(
-         {
-             "node": "strength_weakness",
-             "combined_score": strength_analysis.get("combined_score", 0.0),
-             "overall_strength_rating": strength_analysis.get("overall_strength_rating", "weak"),
-             "momentum_score": strength_analysis.get("momentum", {}).get("score", 0.0),
-             "projection_ratio": strength_analysis.get("projection", {}).get("ratio", 0.0),
-             "depth_retracement": strength_analysis.get("depth", {}).get("retracement_percentage", 0.0),
-             "reversal_warning": weakness_signals.get("reversal_warning", False),
-             "good_for_continuation": setup_applicability.get("good_for_continuation_setups", False),
-             "good_for_reversal": setup_applicability.get("good_for_reversal_setups", False),
-         }
-     )
+    # Extract strength analysis
+    strength_analysis = result.get("strength_analysis", {})
+    weakness_signals = result.get("weakness_signals", {})
+    setup_applicability = result.get("setup_applicability", {})
 
-     # Store strength data for downstream nodes
-     state["market_data"]["strength_analysis"] = strength_analysis
-     state["market_data"]["weakness_signals"] = weakness_signals
-     state["market_data"]["setup_applicability"] = setup_applicability
+    # Update state with strength/weakness analysis
+    state["messages"].append(
+        {
+            "node": "strength_weakness",
+            "combined_score": strength_analysis.get("combined_score", 0.0),
+            "overall_strength_rating": strength_analysis.get(
+                "overall_strength_rating", "weak"
+            ),
+            "momentum_score": strength_analysis.get("momentum", {}).get("score", 0.0),
+            "projection_ratio": strength_analysis.get("projection", {}).get(
+                "ratio", 0.0
+            ),
+            "depth_retracement": strength_analysis.get("depth", {}).get(
+                "retracement_percentage", 0.0
+            ),
+            "reversal_warning": weakness_signals.get("reversal_warning", False),
+            "good_for_continuation": setup_applicability.get(
+                "good_for_continuation_setups", False
+            ),
+            "good_for_reversal": setup_applicability.get(
+                "good_for_reversal_setups", False
+            ),
+        }
+    )
 
-     # Log strength/weakness assessment
-     combined_score = strength_analysis.get("combined_score", 0.0)
-     overall_rating = strength_analysis.get("overall_strength_rating", "weak")
-     momentum = strength_analysis.get("momentum", {})
-     print(
-         f"  📊 Momentum: {momentum.get('rating', 'weak')} ({momentum.get('score', 0):.0f}) | "
-         f"Overall: {overall_rating} ({combined_score:.0f})"
-     )
-     if weakness_signals.get("reversal_warning"):
-         print(f"  ⚠️  Reversal warning: {setup_applicability.get('expected_action', '')}")
+    # Store strength data for downstream nodes
+    state["market_data"]["strength_analysis"] = strength_analysis
+    state["market_data"]["weakness_signals"] = weakness_signals
+    state["market_data"]["setup_applicability"] = setup_applicability
 
-     return state
+    # Log strength/weakness assessment
+    combined_score = strength_analysis.get("combined_score", 0.0)
+    overall_rating = strength_analysis.get("overall_strength_rating", "weak")
+    momentum = strength_analysis.get("momentum", {})
+    print(
+        f"  📊 Momentum: {momentum.get('rating', 'weak')} ({momentum.get('score', 0):.0f}) | "
+        f"Overall: {overall_rating} ({combined_score:.0f})"
+    )
+    if weakness_signals.get("reversal_warning"):
+        print(
+            f"  ⚠️  Reversal warning: {setup_applicability.get('expected_action', '')}"
+        )
+
+    return state
 
 
 # def checkpoint_2_node(state: TradingState) -> TradingState:
@@ -491,14 +553,14 @@ def strength_weakness_node(state: TradingState) -> TradingState:
 #      # Get setup details for approval
 #      active_setups = state["market_data"].get("active_setups", [])
 #      best_setup = active_setups[0] if active_setups else None
-#      
+#
 #      setup_info = None
 #      if best_setup:
 #          entry_zone = best_setup.get("entry_zone", {})
 #          stop_loss = best_setup.get("stop_loss", {})
 #          targets = best_setup.get("targets", [])
 #          tp_price = targets[0].get("price", 0) if targets else 0
-#          
+#
 #          setup_info = {
 #              "setup_type": best_setup.get("type", "UNKNOWN"),
 #              "direction": best_setup.get("direction", "unknown"),
@@ -517,7 +579,7 @@ def strength_weakness_node(state: TradingState) -> TradingState:
 #          print(f"  Probability: {setup_info['probability']:.0f}% | Quality: {setup_info['quality']} | R:R: {setup_info['rrr']:.2f}")
 #      else:
 #          print("  No setups identified.")
-#      
+#
 #      response = input("Approve setup for execution? (yes/no): ").strip().lower()
 #      approval = response in ["yes", "y", "true", "1"]
 #
@@ -531,110 +593,129 @@ def strength_weakness_node(state: TradingState) -> TradingState:
 
 
 def setup_scanner_node(state: TradingState) -> TradingState:
-     """Scan for YTC trading setups (TST, BOF, BPB, PB, CPB).
+    """Scan for YTC trading setups (TST, BOF, BPB, PB, CPB).
 
-     Identifies high-probability YTC setups aligned with trend structure,
-     strength/weakness signals, and support/resistance levels.
-     """
-     print("🟡 Setup Scanner Node")
+    Identifies high-probability YTC setups aligned with trend structure,
+    strength/weakness signals, and support/resistance levels.
+    """
+    print("🟡 Setup Scanner Node")
 
-     # Build bar data for setup scanning
-     price_history = state["market_data"].get("price_history", [])
-     bars = []
-     for bar_data in price_history[-30:]:  # Last 30 bars for scanning
-         bars.append({
-             "open": bar_data.get("open", 0.0),
-             "high": bar_data.get("high", 0.0),
-             "low": bar_data.get("low", 0.0),
-             "close": bar_data.get("close", 0.0),
-             "volume": bar_data.get("volume", 0),
-             "body_strength": "strong" if abs(bar_data.get("close", 0.0) - bar_data.get("open", 0.0)) > 10 else "weak",
-             "close_position": "high" if bar_data.get("close", 0.0) - bar_data.get("low", 0.0) > (bar_data.get("high", 0.0) - bar_data.get("low", 0.0)) * 0.7 else "low",
-         })
+    # Build bar data for setup scanning
+    price_history = state["market_data"].get("price_history", [])
+    bars = []
+    for bar_data in price_history[-30:]:  # Last 30 bars for scanning
+        bars.append(
+            {
+                "open": bar_data.get("open", 0.0),
+                "high": bar_data.get("high", 0.0),
+                "low": bar_data.get("low", 0.0),
+                "close": bar_data.get("close", 0.0),
+                "volume": bar_data.get("volume", 0),
+                "body_strength": "strong"
+                if abs(bar_data.get("close", 0.0) - bar_data.get("open", 0.0)) > 10
+                else "weak",
+                "close_position": "high"
+                if bar_data.get("close", 0.0) - bar_data.get("low", 0.0)
+                > (bar_data.get("high", 0.0) - bar_data.get("low", 0.0)) * 0.7
+                else "low",
+            }
+        )
 
-     # Get trend analysis
-     trend_analysis = state["market_data"].get("trend_analysis", {})
-     trend_dir = str(trend_analysis.get("direction", "sideways")).lower()
-     if "up" in trend_dir:
-         trend_direction = "up"
-     elif "down" in trend_dir:
-         trend_direction = "down"
-     else:
-         trend_direction = "sideways"
+    # Get trend analysis
+    trend_analysis = state["market_data"].get("trend_analysis", {})
+    trend_dir = str(trend_analysis.get("direction", "sideways")).lower()
+    if "up" in trend_dir:
+        trend_direction = "up"
+    elif "down" in trend_dir:
+        trend_direction = "down"
+    else:
+        trend_direction = "sideways"
 
-     swing_structure = state["market_data"].get("swing_structure", {})
+    swing_structure = state["market_data"].get("swing_structure", {})
 
-     # Build S/R levels
-     sr_levels = [
-         {"price": state["market_data"].get("resistance", 0.0), "type": "swing_point", "strength": "strong"},
-         {"price": state["market_data"].get("support", 0.0), "type": "swing_point", "strength": "strong"},
-     ]
+    # Build S/R levels
+    sr_levels = [
+        {
+            "price": state["market_data"].get("resistance", 0.0),
+            "type": "swing_point",
+            "strength": "strong",
+        },
+        {
+            "price": state["market_data"].get("support", 0.0),
+            "type": "swing_point",
+            "strength": "strong",
+        },
+    ]
 
-     # Instantiate and execute the setup scanner agent
-     agent = SetupScanner(
-         config={
-             "trend_data": {
-                 "direction": trend_direction,
-                 "structure": {
-                     "swing_high": swing_structure.get("current_leading_swing_high", 0.0),
-                     "swing_low": swing_structure.get("current_leading_swing_low", 0.0),
-                 },
-                 "strength_rating": trend_analysis.get("strength_rating", "moderate"),
-             },
-             "price_action": {
-                 "current_price": state["market_data"].get("current_price", 0.0),
-                 "bars": bars,
-             },
-             "support_resistance": {
-                 "levels": sr_levels,
-             },
-             "market_conditions": {
-                 "trend_stage": "strong" if trend_analysis.get("strength_rating") in ["strong"] else "weak",
-                 "volatility": state["market_data"].get("volatility", "normal"),
-             },
-             "config": {
-                 "min_confluence_factors": 2,
-                 "min_risk_reward": 1.5,
-                 "enabled_setup_types": ["TST", "BOF", "BPB", "PB", "CPB"],
-             }
-         }
-     )
-     result = agent.execute()
+    # Instantiate and execute the setup scanner agent
+    agent = SetupScanner(
+        config={
+            "trend_data": {
+                "direction": trend_direction,
+                "structure": {
+                    "swing_high": swing_structure.get(
+                        "current_leading_swing_high", 0.0
+                    ),
+                    "swing_low": swing_structure.get("current_leading_swing_low", 0.0),
+                },
+                "strength_rating": trend_analysis.get("strength_rating", "moderate"),
+            },
+            "price_action": {
+                "current_price": state["market_data"].get("current_price", 0.0),
+                "bars": bars,
+            },
+            "support_resistance": {
+                "levels": sr_levels,
+            },
+            "market_conditions": {
+                "trend_stage": "strong"
+                if trend_analysis.get("strength_rating") in ["strong"]
+                else "weak",
+                "volatility": state["market_data"].get("volatility", "normal"),
+            },
+            "config": {
+                "min_confluence_factors": 2,
+                "min_risk_reward": 1.5,
+                "enabled_setup_types": ["TST", "BOF", "BPB", "PB", "CPB"],
+            },
+        }
+    )
+    result = agent.execute()
 
-     # Extract setup results
-     active_setups = result.get("active_setups", [])
-     scan_summary = result.get("scan_summary", {})
+    # Extract setup results
+    active_setups = result.get("active_setups", [])
+    scan_summary = result.get("scan_summary", {})
 
-     # Update state with setup scan results
-     state["messages"].append(
-         {
-             "node": "setup_scanner",
-             "scan_complete": result.get("scan_complete", True),
-             "total_setups": scan_summary.get("total_setups_identified", 0),
-             "trade_ready_count": scan_summary.get("trade_ready_count", 0),
-             "highest_probability_id": scan_summary.get("highest_probability_setup_id"),
-         }
-     )
+    # Update state with setup scan results
+    state["messages"].append(
+        {
+            "node": "setup_scanner",
+            "scan_complete": result.get("scan_complete", True),
+            "total_setups": scan_summary.get("total_setups_identified", 0),
+            "trade_ready_count": scan_summary.get("trade_ready_count", 0),
+            "highest_probability_id": scan_summary.get("highest_probability_setup_id"),
+        }
+    )
 
-     # Store setup data for downstream nodes
-     state["market_data"]["active_setups"] = active_setups
-     state["market_data"]["scan_summary"] = scan_summary
+    # Store setup data for downstream nodes
+    state["market_data"]["active_setups"] = active_setups
+    state["market_data"]["scan_summary"] = scan_summary
 
-     # Log setup scan results
-     if active_setups:
-         best_setup = active_setups[0]
-         print(
-             f"  ✓ {best_setup.get('type', 'UNKNOWN')} setup found "
-             f"| Entry: {best_setup.get('entry_zone', {}).get('ideal', 0)} "
-             f"| R:R: {best_setup.get('risk_reward_ratio', 0):.2f}"
-         )
-         print(
-             f"    Probability: {best_setup.get('probability_score', 0):.0f}% | Quality: {best_setup.get('quality_rating', 'C')}"
-         )
-     else:
-         print(f"  ℹ️  No trade-ready setups found.")
+    # Log setup scan results
+    if active_setups:
+        best_setup = active_setups[0]
+        print(
+            f"  ✓ {best_setup.get('type', 'UNKNOWN')} setup found "
+            f"| Entry: {best_setup.get('entry_zone', {}).get('ideal', 0)} "
+            f"| R:R: {best_setup.get('risk_reward_ratio', 0):.2f}"
+        )
+        print(
+            f"    Probability: {best_setup.get('probability_score', 0):.0f}% | Quality: {best_setup.get('quality_rating', 'C')}"
+        )
+    else:
+        print(f"  ℹ️  No trade-ready setups found.")
 
-     return state
+    return state
 
 
 async def entry_execution_node(state: TradingState) -> TradingState:
@@ -647,7 +728,7 @@ async def entry_execution_node(state: TradingState) -> TradingState:
 
     # Get Hummingbot client for trade execution
     hummingbot_client = await get_hummingbot_client()
-    
+
     # Fetch real current price
     trading_pair = "ETH-USDT"
     current_price = await fetch_current_price(hummingbot_client, trading_pair)
@@ -662,7 +743,9 @@ async def entry_execution_node(state: TradingState) -> TradingState:
             "best_setup": best_setup,
             "account_balance": state.get("account_balance", 10000.0),
             "position_size_limit": 2000.0,
-            "current_price": current_price if current_price > 0 else state["market_data"].get("current_price", 0.0),
+            "current_price": current_price
+            if current_price > 0
+            else state["market_data"].get("current_price", 0.0),
             "entry_bias": state["market_data"].get("entry_bias", "neutral"),
             "hummingbot_client": hummingbot_client,
         }
@@ -731,7 +814,7 @@ async def trade_management_node(state: TradingState) -> TradingState:
 
     # Get Hummingbot client for position management
     hummingbot_client = await get_hummingbot_client()
-    
+
     # Fetch real current price
     trading_pair = "ETH-USDT"
     current_price = await fetch_current_price(hummingbot_client, trading_pair)
@@ -741,7 +824,9 @@ async def trade_management_node(state: TradingState) -> TradingState:
         config={
             "open_position": state.get("positions", {}).get("active")
             and state["market_data"].get("open_position"),
-            "current_price": current_price if current_price > 0 else state["market_data"].get("current_price", 0.0),
+            "current_price": current_price
+            if current_price > 0
+            else state["market_data"].get("current_price", 0.0),
             "momentum": state["market_data"].get("momentum", "weak"),
             "rsi": state["market_data"].get("rsi", 50.0),
             "divergence_detected": state["market_data"].get(
@@ -802,7 +887,7 @@ async def exit_execution_node(state: TradingState) -> TradingState:
 
     # Get Hummingbot client for trade execution
     hummingbot_client = await get_hummingbot_client()
-    
+
     # Fetch real current price
     trading_pair = "ETH-USDT"
     current_price = await fetch_current_price(hummingbot_client, trading_pair)
@@ -813,7 +898,9 @@ async def exit_execution_node(state: TradingState) -> TradingState:
             "open_position": state["market_data"].get("open_position")
             if state.get("positions", {}).get("active")
             else None,
-            "current_price": current_price if current_price > 0 else state["market_data"].get("current_price", 0.0),
+            "current_price": current_price
+            if current_price > 0
+            else state["market_data"].get("current_price", 0.0),
             "exit_reason": "manual",
             "exit_signal_detected": state["market_data"].get(
                 "exit_signal_detected", False
@@ -1145,7 +1232,7 @@ graph = graph_builder.compile()
 
 async def run_trading_graph() -> dict:
     """Run the trading graph with Hummingbot integration.
-    
+
     Returns:
         Final state from the graph execution.
     """
@@ -1170,7 +1257,7 @@ async def run_trading_graph() -> dict:
 
     # Build system initialization config
     init_config = get_system_initialization_config(hummingbot_client=None)
-    
+
     print(f"\n📊 Starting trading session: {thread_id}")
     print(f"   Hummingbot Host: {init_config.get('hummingbot_host')}")
     print(f"   Exchange: {init_config.get('exchange')}")

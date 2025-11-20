@@ -175,6 +175,141 @@ async def fetch_account_positions(hummingbot_client: Any) -> list[dict[str, Any]
         return []
 
 
+async def fetch_price_history_htf(
+    hummingbot_client: Any,
+    trading_pair: str = "BTC-USDT",
+    limit: int = 50,
+    exchange: str = "binance_perpetual"
+) -> list[dict[str, Any]]:
+    """Fetch higher timeframe (4H) OHLCV price history.
+
+    Args:
+        hummingbot_client: Initialized HummingbotAPIClient.
+        trading_pair: Trading pair to fetch history for.
+        limit: Number of candles to fetch (default 50 for 4H = ~8 days).
+        exchange: Exchange connector (e.g., binance_perpetual_testnet).
+
+    Returns:
+        List of OHLCV candles for HTF (4H).
+    """
+    if not hummingbot_client:
+        return []
+
+    try:
+        candles = await hummingbot_client.market_data.get_candles(
+            connector_name=exchange,
+            trading_pair=trading_pair,
+            interval="4h",
+            max_records=limit,
+        )
+        if candles:
+            return [
+                {
+                    "timestamp": c.get("timestamp"),
+                    "open": float(c.get("open", 0)),
+                    "high": float(c.get("high", 0)),
+                    "low": float(c.get("low", 0)),
+                    "close": float(c.get("close", 0)),
+                    "volume": float(c.get("volume", 0)),
+                }
+                for c in candles
+            ]
+        return []
+    except Exception as e:
+        print(f"Error fetching HTF price history: {e}")
+        return []
+
+
+async def fetch_price_history_tf(
+    hummingbot_client: Any,
+    trading_pair: str = "BTC-USDT",
+    limit: int = 100,
+    exchange: str = "binance_perpetual"
+) -> list[dict[str, Any]]:
+    """Fetch primary timeframe (15m) OHLCV price history.
+
+    Args:
+        hummingbot_client: Initialized HummingbotAPIClient.
+        trading_pair: Trading pair to fetch history for.
+        limit: Number of candles to fetch (default 100 for 15m = ~25 hours).
+        exchange: Exchange connector (e.g., binance_perpetual_testnet).
+
+    Returns:
+        List of OHLCV candles for TF (15m).
+    """
+    if not hummingbot_client:
+        return []
+
+    try:
+        candles = await hummingbot_client.market_data.get_candles(
+            connector_name=exchange,
+            trading_pair=trading_pair,
+            interval="15m",
+            max_records=limit,
+        )
+        if candles:
+            return [
+                {
+                    "timestamp": c.get("timestamp"),
+                    "open": float(c.get("open", 0)),
+                    "high": float(c.get("high", 0)),
+                    "low": float(c.get("low", 0)),
+                    "close": float(c.get("close", 0)),
+                    "volume": float(c.get("volume", 0)),
+                }
+                for c in candles
+            ]
+        return []
+    except Exception as e:
+        print(f"Error fetching TF price history: {e}")
+        return []
+
+
+async def fetch_price_history_ltf(
+    hummingbot_client: Any,
+    trading_pair: str = "BTC-USDT",
+    limit: int = 100,
+    exchange: str = "binance_perpetual"
+) -> list[dict[str, Any]]:
+    """Fetch lower timeframe (5m) OHLCV price history.
+
+    Args:
+        hummingbot_client: Initialized HummingbotAPIClient.
+        trading_pair: Trading pair to fetch history for.
+        limit: Number of candles to fetch (default 100 for 5m = ~8 hours).
+        exchange: Exchange connector (e.g., binance_perpetual_testnet).
+
+    Returns:
+        List of OHLCV candles for LTF (5m).
+    """
+    if not hummingbot_client:
+        return []
+
+    try:
+        candles = await hummingbot_client.market_data.get_candles(
+            connector_name=exchange,
+            trading_pair=trading_pair,
+            interval="5m",
+            max_records=limit,
+        )
+        if candles:
+            return [
+                {
+                    "timestamp": c.get("timestamp"),
+                    "open": float(c.get("open", 0)),
+                    "high": float(c.get("high", 0)),
+                    "low": float(c.get("low", 0)),
+                    "close": float(c.get("close", 0)),
+                    "volume": float(c.get("volume", 0)),
+                }
+                for c in candles
+            ]
+        return []
+    except Exception as e:
+        print(f"Error fetching LTF price history: {e}")
+        return []
+
+
 async def fetch_price_history(
     hummingbot_client: Any,
     trading_pair: str = "BTC-USDT",
