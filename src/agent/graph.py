@@ -11,7 +11,7 @@ from typing import Annotated, Literal, TypedDict
 
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import StateGraph, END, START
-from langgraph.types import Command, interrupt
+from langgraph.types import Command
 
 from agent.agents import (
     EconomicCalendar,
@@ -33,6 +33,30 @@ from agent.config import (
     create_hummingbot_client,
     get_system_initialization_config,
 )
+from agent.agents.utils.hummingbot import (
+    fetch_current_price,
+    fetch_market_data,
+    fetch_price_history,
+)
+
+# Cache for hummingbot client initialization
+_hummingbot_client_cache = None
+
+async def get_hummingbot_client():
+    """Get or initialize hummingbot client (cached).
+    
+    Returns:
+        Initialized HummingbotAPIClient or None if unavailable.
+    """
+    global _hummingbot_client_cache
+    if _hummingbot_client_cache is None:
+        try:
+            _hummingbot_client_cache = await create_hummingbot_client()
+        except Exception as e:
+            print(f"⚠️  Hummingbot initialization failed: {e}")
+            _hummingbot_client_cache = False  # Mark as failed to avoid retries
+    
+    return _hummingbot_client_cache if _hummingbot_client_cache is not False else None
 
 
 class TradingState(TypedDict):
@@ -47,10 +71,9 @@ class TradingState(TypedDict):
     setup_approved: bool
     session_status: Literal["active", "paused", "closed"]
     account_balance: float
-    hummingbot_client: object
 
 
-def system_initialization_node(state: TradingState) -> TradingState:
+async def system_initialization_node(state: TradingState) -> TradingState:
     """Initialize the trading session and validate system readiness.
 
     Executes SystemInitialization agent to perform pre-trading checks and
@@ -58,13 +81,15 @@ def system_initialization_node(state: TradingState) -> TradingState:
     """
     print("🟢 System Initialization Node")
 
-    # Build configuration from environment and defaults with Hummingbot client from state
-    hummingbot_client = state.get("hummingbot_client")
+    # Get or initialize Hummingbot client (cached)
+    hummingbot_client = await get_hummingbot_client()
+    
+    # Build configuration from environment and defaults with Hummingbot client
     config = get_system_initialization_config(hummingbot_client=hummingbot_client)
 
     # Instantiate and execute the system initialization agent
     agent = SystemInitialization(config=config)
-    result = agent.execute()
+    result = await agent.execute()
 
     # Update state with initialization result
     state["messages"].append(
@@ -136,7 +161,7 @@ def risk_management_node(state: TradingState) -> TradingState:
     return state
 
 
-def market_structure_node(state: TradingState) -> TradingState:
+async def market_structure_node(state: TradingState) -> TradingState:
     """Analyze market structure to identify support/resistance and key levels.
 
     Identifies trend direction, support/resistance levels, and volatility
@@ -144,13 +169,28 @@ def market_structure_node(state: TradingState) -> TradingState:
     """
     print("🟡 Market Structure Node")
 
+    # Get Hummingbot client for market data
+    hummingbot_client = await get_hummingbot_client()
+    
+    # Fetch real market data from Hummingbot
+    trading_pair = "ETH-USDT"
+    current_price = await fetch_current_price(hummingbot_client, trading_pair)
+    market_data = await fetch_market_data(hummingbot_client, trading_pair)
+    price_history = await fetch_price_history(
+        hummingbot_client, trading_pair, interval="4h", limit=100
+    )
+
     # Instantiate and execute the market structure agent
     agent = MarketStructure(
         config={
-            "instrument": "ETH-USDT",
-            "timeframe": "1H",
-            "lookback_periods": 100,
-            "base_price": 2500.0,
+            "instrument": trading_pair,
+            "timeframe": "4H",
+            "lookback_periods": len(price_history),
+            "base_price": current_price,
+            "hummingbot_client": hummingbot_client,
+            "current_price": current_price,
+            "market_data": market_data,
+            "price_history": price_history,
         }
     )
     result = agent.execute()
@@ -228,16 +268,11 @@ def economic_calendar_node(state: TradingState) -> TradingState:
 def checkpoint_1_node(state: TradingState) -> TradingState:
     """First checkpoint - pause for human decision on trend analysis.
 
-    Uses interrupt to pause execution and wait for human approval before
-    proceeding to trend definition.
+    Prompts for user approval before proceeding to trend definition.
     """
     print("🔵 Checkpoint 1 - Awaiting human input")
-    approval = interrupt(
-        {
-            "question": "Continue to trend analysis?",
-            "messages": state["messages"],
-        }
-    )
+    response = input("Continue to trend analysis? (yes/no): ").strip().lower()
+    approval = response in ["yes", "y", "true", "1"]
 
     state["human_decisions"].append({"checkpoint": 1, "decision": approval})
     if not approval:
@@ -368,16 +403,14 @@ def checkpoint_2_node(state: TradingState) -> TradingState:
         else None
     )
 
-    approval = interrupt(
-        {
-            "question": "Approve setup for execution?",
-            "setup": setup_info,
-            "market_summary": {
-                "trend": state["market_data"].get("primary_trend", "unknown"),
-                "momentum": state["market_data"].get("momentum", "unknown"),
-            },
-        }
-    )
+    # Display setup details for approval
+    if setup_info:
+        print(f"  Setup Type: {setup_info['setup_type']}")
+        print(f"  Entry: {setup_info['entry']}, SL: {setup_info['stop_loss']}, TP: {setup_info['take_profit']}")
+        print(f"  Confidence: {setup_info['confidence']}")
+    
+    response = input("Approve setup for execution? (yes/no): ").strip().lower()
+    approval = response in ["yes", "y", "true", "1"]
 
     state["human_decisions"].append({"checkpoint": 2, "decision": approval})
     state["setup_approved"] = approval
@@ -455,7 +488,7 @@ def setup_scanner_node(state: TradingState) -> TradingState:
     return state
 
 
-def entry_execution_node(state: TradingState) -> TradingState:
+async def entry_execution_node(state: TradingState) -> TradingState:
     """Execute trade entry and initialize position with stop loss and take profit.
 
     Places entry order at calculated entry level with proper position sizing
@@ -463,14 +496,22 @@ def entry_execution_node(state: TradingState) -> TradingState:
     """
     print("🟡 Entry Execution Node")
 
+    # Get Hummingbot client for trade execution
+    hummingbot_client = await get_hummingbot_client()
+    
+    # Fetch real current price
+    trading_pair = "ETH-USDT"
+    current_price = await fetch_current_price(hummingbot_client, trading_pair)
+
     # Instantiate and execute the entry execution agent
     agent = EntryExecution(
         config={
             "best_setup": state["market_data"].get("best_setup"),
-            "account_balance": 100000.0,
+            "account_balance": state.get("account_balance", 10000.0),
             "position_size_limit": 2000.0,
-            "current_price": state["market_data"].get("current_price", 0.0),
+            "current_price": current_price if current_price > 0 else state["market_data"].get("current_price", 0.0),
             "entry_bias": state["market_data"].get("entry_bias", "neutral"),
+            "hummingbot_client": hummingbot_client,
         }
     )
     result = agent.execute()
@@ -527,7 +568,7 @@ def entry_execution_node(state: TradingState) -> TradingState:
     return state
 
 
-def trade_management_node(state: TradingState) -> TradingState:
+async def trade_management_node(state: TradingState) -> TradingState:
     """Monitor and manage open position with dynamic stop loss and exit signals.
 
     Adjusts stops to breakeven or trailing levels, monitors for exit signals
@@ -535,17 +576,25 @@ def trade_management_node(state: TradingState) -> TradingState:
     """
     print("🟡 Trade Management Node")
 
+    # Get Hummingbot client for position management
+    hummingbot_client = await get_hummingbot_client()
+    
+    # Fetch real current price
+    trading_pair = "ETH-USDT"
+    current_price = await fetch_current_price(hummingbot_client, trading_pair)
+
     # Instantiate and execute the trade management agent
     agent = TradeManagement(
         config={
             "open_position": state.get("positions", {}).get("active")
             and state["market_data"].get("open_position"),
-            "current_price": state["market_data"].get("current_price", 0.0),
+            "current_price": current_price if current_price > 0 else state["market_data"].get("current_price", 0.0),
             "momentum": state["market_data"].get("momentum", "weak"),
             "rsi": state["market_data"].get("rsi", 50.0),
             "divergence_detected": state["market_data"].get(
                 "divergence_detected", False
             ),
+            "hummingbot_client": hummingbot_client,
         }
     )
     result = agent.execute()
@@ -590,7 +639,7 @@ def trade_management_node(state: TradingState) -> TradingState:
     return state
 
 
-def exit_execution_node(state: TradingState) -> TradingState:
+async def exit_execution_node(state: TradingState) -> TradingState:
     """Execute trade exit and finalize position with P&L calculation.
 
     Closes the position at market conditions, calculates final profit/loss,
@@ -598,17 +647,25 @@ def exit_execution_node(state: TradingState) -> TradingState:
     """
     print("🟡 Exit Execution Node")
 
+    # Get Hummingbot client for trade execution
+    hummingbot_client = await get_hummingbot_client()
+    
+    # Fetch real current price
+    trading_pair = "ETH-USDT"
+    current_price = await fetch_current_price(hummingbot_client, trading_pair)
+
     # Instantiate and execute the exit execution agent
     agent = ExitExecution(
         config={
             "open_position": state["market_data"].get("open_position")
             if state.get("positions", {}).get("active")
             else None,
-            "current_price": state["market_data"].get("current_price", 0.0),
+            "current_price": current_price if current_price > 0 else state["market_data"].get("current_price", 0.0),
             "exit_reason": "manual",
             "exit_signal_detected": state["market_data"].get(
                 "exit_signal_detected", False
             ),
+            "hummingbot_client": hummingbot_client,
         }
     )
     result = agent.execute()
@@ -935,42 +992,12 @@ graph_builder.add_edge("next_session_prep", END)
 graph = graph_builder.compile()
 
 
-# Global variable to store initialized Hummingbot client
-_hummingbot_client = None
-
-
-async def initialize_system() -> None:
-    """Initialize Hummingbot client for the trading system."""
-    global _hummingbot_client
-    try:
-        print("🔄 Initializing Hummingbot API Client...")
-        _hummingbot_client = await create_hummingbot_client()
-        if _hummingbot_client:
-            print("✓ Hummingbot API Client initialized successfully")
-        else:
-            print("⚠️  Hummingbot API Client initialization failed - will run in demo mode")
-    except Exception as e:
-        print(f"❌ Error initializing Hummingbot: {e}")
-        _hummingbot_client = None
-
-
-async def ensure_hummingbot_initialized() -> None:
-    """Ensure Hummingbot client is initialized before graph execution."""
-    global _hummingbot_client
-    if _hummingbot_client is None:
-        await initialize_system()
-
-
-def run_trading_graph() -> dict:
+async def run_trading_graph() -> dict:
     """Run the trading graph with Hummingbot integration.
     
     Returns:
         Final state from the graph execution.
     """
-    # Ensure Hummingbot is initialized before running
-    # Note: This runs synchronously, so initialization must have happened
-    # Call asyncio.run(ensure_hummingbot_initialized()) before invoking if needed
-    
     # Example usage with human-in-the-loop (local testing)
     thread_id = str(uuid.uuid4())
     checkpointer = InMemorySaver()
@@ -988,31 +1015,25 @@ def run_trading_graph() -> dict:
         "setup_approved": False,
         "session_status": "active",
         "account_balance": 0.0,
-        "hummingbot_client": _hummingbot_client,  # Pass initialized client to state
     }
 
-    # Build system initialization config with Hummingbot client
-    init_config = get_system_initialization_config(
-        hummingbot_client=_hummingbot_client
-    )
+    # Build system initialization config
+    init_config = get_system_initialization_config(hummingbot_client=None)
     
     print(f"\n📊 Starting trading session: {thread_id}")
     print(f"   Hummingbot Host: {init_config.get('hummingbot_host')}")
     print(f"   Exchange: {init_config.get('exchange')}")
     print(f"   Trading Pair: {init_config.get('trading_pair')}\n")
 
-    # Run the graph until first interrupt
-    result = local_graph.invoke(initial_state, config)
+    # Run the graph until first interrupt (using async API)
+    result = await local_graph.ainvoke(initial_state, config)
     return result
 
 
 if __name__ == "__main__":
-    # Initialize Hummingbot client
-    asyncio.run(initialize_system())
-    
     # Run the trading graph
     try:
-        result = run_trading_graph()
+        result = asyncio.run(run_trading_graph())
         print("\n__interrupt__:", result.get("__interrupt__"))
     except KeyboardInterrupt:
         print("\n\n⏹️  Trading session interrupted by user")

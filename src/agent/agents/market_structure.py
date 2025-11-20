@@ -43,32 +43,45 @@ class MarketStructure:
 
         Args:
             config: Optional configuration with market parameters.
-                    Expected keys: instrument, timeframe, lookback_periods, etc.
+                    Expected keys: instrument, timeframe, lookback_periods,
+                    current_price, price_history, market_data, hummingbot_client
         """
         self.config = config or {}
         self.instrument = self.config.get("instrument", "ETH-USDT")
-        self.timeframe = self.config.get("timeframe", "1H")
+        self.timeframe = self.config.get("timeframe", "4H")
         self.lookback_periods = self.config.get("lookback_periods", 100)
-        # ETH-USDT reference levels
-        self.base_price = self.config.get("base_price", 2500.0)
+        self.base_price = self.config.get("base_price")
+        self.current_price = self.config.get("current_price", 0.0)
+        self.price_history = self.config.get("price_history", [])
+        self.market_data = self.config.get("market_data", {})
+        self.hummingbot_client = self.config.get("hummingbot_client")
 
     def execute(self) -> MarketStructureOutput:
-        """Execute market structure analysis.
+        """Execute market structure analysis using real price data from Hummingbot.
 
         Returns:
             MarketStructureOutput with identified structure and levels.
         """
         from datetime import datetime
 
-        # Generate mock price history
-        price_history = self._generate_mock_prices()
-        current_price = price_history[-1]
+        # Extract real price history from Hummingbot
+        price_history = []
+        if self.price_history:
+            price_history = [
+                float(candle.get("close", 0))
+                if isinstance(candle, dict)
+                else float(candle)
+                for candle in self.price_history
+            ]
+
+        # Use real current price from Hummingbot
+        current_price = self.current_price if self.current_price > 0 else 0.0
 
         # Analyze trend direction
         trend = self._analyze_trend(price_history)
 
         # Identify support and resistance levels
-        support, resistance = self._identify_support_resistance(price_history)
+        support, resistance = self._identify_support_resistance(price_history, current_price)
 
         # Assess market volatility
         volatility = self._assess_volatility(price_history)
@@ -77,7 +90,7 @@ class MarketStructure:
         key_levels = self._identify_key_levels(support, resistance)
 
         return {
-            "analysis_complete": True,
+            "analysis_complete": bool(price_history and current_price > 0),
             "trend_direction": trend,
             "current_price": current_price,
             "support_level": support,
@@ -88,27 +101,8 @@ class MarketStructure:
             "analysis_timestamp": datetime.utcnow().isoformat(),
         }
 
-    def _generate_mock_prices(self) -> list[float]:
-        """Generate mock ETH-USDT price history.
-
-        Returns:
-            List of historical prices (lookback_periods length).
-        """
-        prices = [self.base_price]
-        random.seed(42)  # For reproducibility
-
-        for _ in range(self.lookback_periods - 1):
-            # Generate realistic price movements (±2% per candle)
-            change_percent = random.uniform(-2.0, 2.5)  # Slight upward bias
-            new_price = prices[-1] * (1 + change_percent / 100.0)
-            # Ensure price stays in realistic ETH-USDT range (1500-3500)
-            new_price = max(1500.0, min(3500.0, new_price))
-            prices.append(round(new_price, 2))
-
-        return prices
-
     def _analyze_trend(self, price_history: list[float]) -> TrendDirection:
-        """Determine the current market trend direction.
+        """Determine the current market trend direction from price history.
 
         Args:
             price_history: List of historical prices.
@@ -116,44 +110,57 @@ class MarketStructure:
         Returns:
             TrendDirection indicating uptrend, downtrend, sideways, or unknown.
         """
-        if len(price_history) < 20:
+        if len(price_history) < 10:
             return TrendDirection.UNKNOWN
 
-        recent = price_history[-20:]
-        early = price_history[-40:-20]
+        # Use different timeframes for trend analysis
+        short_period = min(10, len(price_history))
+        medium_period = min(25, len(price_history))
 
-        recent_avg = sum(recent) / len(recent)
-        early_avg = sum(early) / len(early)
+        # Calculate simple moving averages
+        short_avg = sum(price_history[-short_period:]) / short_period
+        medium_avg = sum(price_history[-medium_period:]) / medium_period
+        
+        current_price = price_history[-1]
 
-        if recent_avg > early_avg * 1.01:
+        # Determine trend based on price position relative to moving averages
+        if current_price > short_avg > medium_avg:
             return TrendDirection.UPTREND
-        elif recent_avg < early_avg * 0.99:
+        elif current_price < short_avg < medium_avg:
             return TrendDirection.DOWNTREND
         else:
             return TrendDirection.SIDEWAYS
 
     def _identify_support_resistance(
-        self, price_history: list[float]
+        self, price_history: list[float], current_price: float = 0.0
     ) -> tuple[float, float]:
-        """Identify support and resistance price levels.
+        """Identify support and resistance price levels from real price data.
 
         Args:
             price_history: List of historical prices.
+            current_price: Current price for reference.
 
         Returns:
             Tuple of (support_level, resistance_level).
         """
         if not price_history:
-            return self.base_price * 0.95, self.base_price * 1.05
+            return 0.0, 0.0
 
-        min_price = min(price_history[-50:]) if len(price_history) >= 50 else min(price_history)
-        max_price = max(price_history[-50:]) if len(price_history) >= 50 else max(price_history)
+        # Use last 100 candles for more recent support/resistance
+        lookback = min(100, len(price_history))
+        recent_prices = price_history[-lookback:]
+        
+        min_price = min(recent_prices)
+        max_price = max(recent_prices)
 
-        # Add 2% margin for levels
-        support = min_price * 0.98
-        resistance = max_price * 1.02
+        # Calculate support and resistance with dynamic margins
+        price_range = max_price - min_price
+        margin = max(0.005, price_range * 0.01)  # At least 0.5% or 1% of range
+        
+        support = round(min_price - margin, 2)
+        resistance = round(max_price + margin, 2)
 
-        return round(support, 2), round(resistance, 2)
+        return support, resistance
 
     def _assess_volatility(self, price_history: list[float]) -> str:
         """Assess current market volatility.

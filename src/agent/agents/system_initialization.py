@@ -47,7 +47,7 @@ class SystemInitialization:
             config.get("trading_pair", "ETH-USDT") if config else "ETH-USDT"
         )
 
-    def execute(self) -> SystemInitializationOutput:
+    async def execute(self) -> SystemInitializationOutput:
         """Execute system initialization with Hummingbot integration.
 
         Returns:
@@ -81,7 +81,7 @@ class SystemInitialization:
                 )
 
             # Fetch account balance from Hummingbot
-            self.account_balance = self._fetch_account_balance()
+            self.account_balance = await self._fetch_account_balance()
             if self.account_balance <= 0:
                 errors.append("Failed to fetch account balance from Hummingbot")
             elif self.account_balance < 100.0:
@@ -191,26 +191,17 @@ class SystemInitialization:
         except Exception:
             return False
 
-    def _fetch_account_balance(self) -> float:
+    async def _fetch_account_balance(self) -> float:
         """Fetch account balance from Hummingbot API.
 
         Returns:
             Account balance in USDT, or 0.0 if fetch fails.
         """
-        try:
-            if not self.hummingbot_client:
-                return 0.0
+        if not self.hummingbot_client:
+            return 0.0
 
-            # Try to get the current event loop, if none exists create a new one
-            try:
-                loop = asyncio.get_running_loop()
-                # If we're in an async context, we need to run sync
-                # This shouldn't happen in a sync context
-                return 0.0
-            except RuntimeError:
-                # No running loop, safe to create one
-                balance = asyncio.run(self._get_balance_async())
-                return balance
+        try:
+            return await self._get_balance_async()
         except Exception as e:
             print(f"Error fetching balance from Hummingbot: {e}")
             return 0.0
@@ -228,15 +219,17 @@ class SystemInitialization:
             # Sum up USDT balance across all accounts and connectors
             total_usdt = 0.0
             if portfolio_state:
+                # Portfolio state structure: {'master_account': {'connector_name': [token_items]}}
                 for account_name, connectors in portfolio_state.items():
-                    for connector_name, balances in connectors.items():
-                        if isinstance(balances, list):
-                            for balance_item in balances:
-                                if (
-                                    isinstance(balance_item, dict)
-                                    and balance_item.get("asset") == "USDT"
-                                ):
-                                    total_usdt += float(balance_item.get("free", 0))
+                    if isinstance(connectors, dict):
+                        for connector_name, token_list in connectors.items():
+                            if isinstance(token_list, list):
+                                for token_item in token_list:
+                                    if (
+                                        isinstance(token_item, dict)
+                                        and token_item.get("token") == "USDT"
+                                    ):
+                                        total_usdt += float(token_item.get("available_units", 0))
 
             return total_usdt
         except Exception as e:
@@ -254,8 +247,8 @@ class SystemInitialization:
             if key not in self.config and not hasattr(self, key):
                 return False
 
-        # Validate exchange is supported
-        supported_exchanges = ["binance-perpeptual", "binance-perpetual-testnet"]
+        # Validate exchange is supported (allow demo mode)
+        supported_exchanges = ["binance-perpeptual", "binance-perpetual-testnet", "binance"]
         if self.exchange not in supported_exchanges:
             return False
 
