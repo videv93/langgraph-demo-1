@@ -9,6 +9,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, TypedDict
 
+import pandas as pd
+
 
 class SetupType(str, Enum):
     """YTC trading setup types."""
@@ -124,7 +126,11 @@ class SetupScanner:
         # Price action
         price_action = self.config.get("price_action", {})
         self.current_price = price_action.get("current_price", 0.0)
-        self.bars = price_action.get("bars", [])
+        bars_data = price_action.get("bars", [])
+        # Convert list of dicts to DataFrame
+        self.dataframe = (
+            pd.DataFrame(bars_data) if bars_data else pd.DataFrame()
+        )
 
         # Support/Resistance levels
         sr_data = self.config.get("support_resistance", {})
@@ -205,7 +211,7 @@ class SetupScanner:
         """
         setups = []
 
-        if len(self.bars) < 3:
+        if len(self.dataframe) < 3:
             return setups
 
         # Check if price is approaching any S/R level
@@ -216,10 +222,12 @@ class SetupScanner:
             # Price within 1% of S/R level (approaching)
             if 0 < proximity_pct <= 1.0:
                 # Check for rejection bars at the level
-                has_rejection_bars = self._identify_rejection_bars(self.bars[-3:])
+                has_rejection_bars = self._identify_rejection_bars(
+                    self.dataframe.iloc[-3:].to_dict("records")
+                )
 
                 if has_rejection_bars and self._validates_against_trend(
-                    self.bars[-3:], self.trend_direction
+                    self.dataframe.iloc[-3:].to_dict("records"), self.trend_direction
                 ):
                     # Determine setup direction
                     if self.trend_direction == "up":
@@ -294,11 +302,11 @@ class SetupScanner:
         """
         setups = []
 
-        if len(self.bars) < 10:
+        if len(self.dataframe) < 10:
             return setups
 
         # Check for recent breakout attempts
-        recent_bars = self.bars[-10:]
+        recent_bars = self.dataframe.iloc[-10:].to_dict("records")
         breakout_bar = recent_bars[0]
 
         for sr_level in self.sr_levels:
@@ -379,15 +387,19 @@ class SetupScanner:
         """
         setups = []
 
-        if len(self.bars) < 15:
+        if len(self.dataframe) < 15:
             return setups
 
         # Look for sustained breakouts followed by pullbacks
         for sr_level in self.sr_levels:
             level_price = sr_level.get("price", 0.0)
 
-            if self._has_sustained_breakout(self.bars[-5:], level_price):
-                pullback_legs = self._identify_pullback_structure(self.bars[-15:])
+            if self._has_sustained_breakout(
+                self.dataframe.iloc[-5:].to_dict("records"), level_price
+            ):
+                pullback_legs = self._identify_pullback_structure(
+                    self.dataframe.iloc[-15:].to_dict("records")
+                )
 
                 if pullback_legs and self._pullback_holds_level(
                     pullback_legs, level_price
@@ -463,10 +475,12 @@ class SetupScanner:
         """
         setups = []
 
-        if len(self.bars) < 5:
+        if len(self.dataframe) < 5:
             return setups
 
-        swing_structure = self._identify_swing_structure(self.bars)
+        swing_structure = self._identify_swing_structure(
+            self.dataframe.to_dict("records")
+        )
 
         if len(swing_structure) >= 3 and self._is_simple_pullback(
             swing_structure, self.trend_direction
@@ -562,10 +576,12 @@ class SetupScanner:
         """
         setups = []
 
-        if len(self.bars) < 15:
+        if len(self.dataframe) < 15:
             return setups
 
-        swing_structure = self._identify_swing_structure(self.bars)
+        swing_structure = self._identify_swing_structure(
+            self.dataframe.to_dict("records")
+        )
 
         if len(swing_structure) >= 5 and self._is_complex_pullback(
             swing_structure, self.trend_direction
