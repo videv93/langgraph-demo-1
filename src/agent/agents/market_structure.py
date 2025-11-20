@@ -4,6 +4,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, TypedDict
 import numpy as np
+import pandas as pd
+import talib
 from scipy.signal import argrelextrema
 
 
@@ -187,7 +189,7 @@ class MarketStructure:
         return swing_highs, swing_lows
 
     def _analyze_trend_structure(self, closes: list[float]) -> TrendDirection:
-        """Determine trend structure from price action.
+        """Determine trend structure from price action using talib SMA.
 
         Args:
             closes: List of closing prices.
@@ -195,16 +197,22 @@ class MarketStructure:
         Returns:
             TrendDirection enum value.
         """
-        if len(closes) < 10:
+        if len(closes) < 25:
             return TrendDirection.SIDEWAYS
 
-        short_ma = sum(closes[-10:]) / 10
-        medium_ma = sum(closes[-25:]) / 25
-        current = closes[-1]
+        close_array = np.array(closes, dtype=np.float64)
 
-        if current > short_ma > medium_ma:
+        # Calculate moving averages using talib
+        short_ma = talib.SMA(close_array, timeperiod=10)
+        medium_ma = talib.SMA(close_array, timeperiod=25)
+
+        current = closes[-1]
+        short_ma_current = short_ma[-1]
+        medium_ma_current = medium_ma[-1]
+
+        if current > short_ma_current > medium_ma_current:
             return TrendDirection.UPTREND
-        elif current < short_ma < medium_ma:
+        elif current < short_ma_current < medium_ma_current:
             return TrendDirection.DOWNTREND
         else:
             return TrendDirection.SIDEWAYS
@@ -247,7 +255,7 @@ class MarketStructure:
         return sorted(zones, key=lambda z: z["level"])
 
     def _count_touches(self, level: float, thickness: float) -> int:
-        """Count how many times price touched a zone.
+        """Count how many times price touched a zone using pandas.
 
         Args:
             level: Zone center level.
@@ -264,12 +272,12 @@ class MarketStructure:
             for c in self.ohlc_data
         ]
 
-        touches = 0
-        for close in closes:
-            if level - thickness <= close <= level + thickness:
-                touches += 1
+        # Convert to pandas Series for vectorized comparison
+        close_series = pd.Series(closes)
+        touches = ((close_series >= level - thickness) & 
+                   (close_series <= level + thickness)).sum()
 
-        return touches
+        return int(touches)
 
     def _get_prior_session_levels(
         self, highs: list[float], lows: list[float], closes: list[float]
@@ -362,3 +370,40 @@ class MarketStructure:
             },
             "analysis_timestamp": datetime.utcnow().isoformat(),
         }
+
+    def calculate_indicators(self, closes: list[float]) -> dict[str, float]:
+        """Calculate additional technical indicators using talib.
+
+        Args:
+            closes: List of closing prices.
+
+        Returns:
+            Dict with indicator values (RSI, MACD, Bollinger Bands).
+        """
+        if len(closes) < 14:
+            return {}
+
+        close_array = np.array(closes, dtype=np.float64)
+
+        indicators = {}
+
+        # RSI
+        rsi = talib.RSI(close_array, timeperiod=14)
+        if not np.isnan(rsi[-1]):
+            indicators["rsi"] = float(rsi[-1])
+
+        # MACD
+        macd, signal, hist = talib.MACD(close_array, fastperiod=12, slowperiod=26, signalperiod=9)
+        if not np.isnan(macd[-1]):
+            indicators["macd"] = float(macd[-1])
+            indicators["macd_signal"] = float(signal[-1])
+            indicators["macd_histogram"] = float(hist[-1])
+
+        # Bollinger Bands
+        upper, middle, lower = talib.BBANDS(close_array, timeperiod=20, nbdevup=2, nbdevdn=2)
+        if not np.isnan(upper[-1]):
+            indicators["bb_upper"] = float(upper[-1])
+            indicators["bb_middle"] = float(middle[-1])
+            indicators["bb_lower"] = float(lower[-1])
+
+        return indicators
