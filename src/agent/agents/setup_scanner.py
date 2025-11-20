@@ -236,13 +236,9 @@ class SetupScanner:
 
                     # Risk-to-reward ratio
                     if direction == "long":
-                        rrr = (targets[0]["price"] - entry_ideal) / (
-                            entry_ideal - stop
-                        )
+                        rrr = (targets[0]["price"] - entry_ideal) / (entry_ideal - stop)
                     else:
-                        rrr = (entry_ideal - targets[0]["price"]) / (
-                            stop - entry_ideal
-                        )
+                        rrr = (entry_ideal - targets[0]["price"]) / (stop - entry_ideal)
 
                     # Confidence score
                     base_score = 70.0
@@ -311,9 +307,9 @@ class SetupScanner:
             # Detect breakout bar (opposite to trend direction)
             if self._has_breakout_bar(breakout_bar, level_price):
                 # Check for failure in follow-through bars
-                if self._has_weak_followthrough(recent_bars[1:]) or self._pullback_through_level(
-                    recent_bars[1:], level_price
-                ):
+                if self._has_weak_followthrough(
+                    recent_bars[1:]
+                ) or self._pullback_through_level(recent_bars[1:], level_price):
                     # Determine direction (counter to breakout)
                     if breakout_bar["high"] > level_price:
                         direction = "short"
@@ -329,18 +325,16 @@ class SetupScanner:
 
                     # Risk-to-reward ratio
                     if direction == "long":
-                        rrr = (targets[0]["price"] - entry_ideal) / (
-                            entry_ideal - stop
-                        )
+                        rrr = (targets[0]["price"] - entry_ideal) / (entry_ideal - stop)
                     else:
-                        rrr = (entry_ideal - targets[0]["price"]) / (
-                            stop - entry_ideal
-                        )
+                        rrr = (entry_ideal - targets[0]["price"]) / (stop - entry_ideal)
 
                     # Confidence score
                     base_score = 75.0
                     confluence_factors = ["failed breakout", "trapped trader reversal"]
-                    confidence = base_score + 15  # BOF has good trapped trader potential
+                    confidence = (
+                        base_score + 15
+                    )  # BOF has good trapped trader potential
 
                     if self.trend_stage == "ranging":
                         confidence -= 10  # BOF less reliable in ranging
@@ -413,13 +407,9 @@ class SetupScanner:
 
                     # Risk-to-reward ratio
                     if direction == "long":
-                        rrr = (targets[0]["price"] - entry_ideal) / (
-                            entry_ideal - stop
-                        )
+                        rrr = (targets[0]["price"] - entry_ideal) / (entry_ideal - stop)
                     else:
-                        rrr = (entry_ideal - targets[0]["price"]) / (
-                            stop - entry_ideal
-                        )
+                        rrr = (entry_ideal - targets[0]["price"]) / (stop - entry_ideal)
 
                     # Confidence score
                     base_score = 70.0
@@ -716,9 +706,7 @@ class SetupScanner:
             # Downtrend: rejection bars should have strong closes down
             return any(b.get("close_position") == "high" for b in bars)
 
-    def _has_breakout_bar(
-        self, bar: BarData, level_price: float
-    ) -> bool:
+    def _has_breakout_bar(self, bar: BarData, level_price: float) -> bool:
         """Check if a bar is a breakout bar (closes beyond level).
 
         Args:
@@ -743,14 +731,10 @@ class SetupScanner:
             return True
 
         # Weak follow-through: decreasing bar sizes, weak closes
-        weak_count = sum(
-            1 for b in bars if b.get("body_strength") == "weak"
-        )
+        weak_count = sum(1 for b in bars if b.get("body_strength") == "weak")
         return weak_count >= len(bars) * 0.5
 
-    def _pullback_through_level(
-        self, bars: list[BarData], level_price: float
-    ) -> bool:
+    def _pullback_through_level(self, bars: list[BarData], level_price: float) -> bool:
         """Check if bars pullback through a level.
 
         Args:
@@ -766,9 +750,7 @@ class SetupScanner:
             for b in bars
         )
 
-    def _has_sustained_breakout(
-        self, bars: list[BarData], level_price: float
-    ) -> bool:
+    def _has_sustained_breakout(self, bars: list[BarData], level_price: float) -> bool:
         """Check if bars show sustained breakout past level.
 
         Args:
@@ -785,7 +767,9 @@ class SetupScanner:
         follow_bars = bars[1:]
 
         # Check if initial bar breaks level
-        if not (breakout_bar["high"] > level_price or breakout_bar["low"] < level_price):
+        if not (
+            breakout_bar["high"] > level_price or breakout_bar["low"] < level_price
+        ):
             return False
 
         # Check if follow-through sustains it (doesn't immediately reverse)
@@ -797,9 +781,7 @@ class SetupScanner:
 
         return True
 
-    def _identify_pullback_structure(
-        self, bars: list[BarData]
-    ) -> list[BarData]:
+    def _identify_pullback_structure(self, bars: list[BarData]) -> list[BarData]:
         """Identify pullback structure legs.
 
         Args:
@@ -839,9 +821,7 @@ class SetupScanner:
             b["close"] > level_price for b in pullback_bars
         )
 
-    def _identify_swing_structure(
-        self, bars: list[BarData]
-    ) -> list[BarData]:
+    def _identify_swing_structure(self, bars: list[BarData]) -> list[BarData]:
         """Identify swing structure (swing highs and lows).
 
         Args:
@@ -868,9 +848,7 @@ class SetupScanner:
 
         return structure
 
-    def _is_simple_pullback(
-        self, swing_structure: list[BarData], trend: str
-    ) -> bool:
+    def _is_simple_pullback(self, swing_structure: list[BarData], trend: str) -> bool:
         """Check if swing structure represents a simple pullback.
 
         Args:
@@ -886,20 +864,12 @@ class SetupScanner:
         # Simple pullback: 3 swings, one against the trend
         if trend == "up":
             # Should be: high, low, high (pullback low)
-            return (
-                swing_structure[-3].get("high")
-                < swing_structure[-1].get("high")
-            )
+            return swing_structure[-3].get("high") < swing_structure[-1].get("high")
         else:
             # Should be: low, high, low (pullback high)
-            return (
-                swing_structure[-3].get("low")
-                > swing_structure[-1].get("low")
-            )
+            return swing_structure[-3].get("low") > swing_structure[-1].get("low")
 
-    def _is_complex_pullback(
-        self, swing_structure: list[BarData], trend: str
-    ) -> bool:
+    def _is_complex_pullback(self, swing_structure: list[BarData], trend: str) -> bool:
         """Check if swing structure represents a complex pullback.
 
         Args:
@@ -928,9 +898,7 @@ class SetupScanner:
 
         return against_trend_count >= 2  # At least 2 legs against trend
 
-    def _structure_formation_complete(
-        self, recent_swings: list[BarData]
-    ) -> bool:
+    def _structure_formation_complete(self, recent_swings: list[BarData]) -> bool:
         """Check if pullback structure formation is complete.
 
         Args:
@@ -946,9 +914,7 @@ class SetupScanner:
         # indicating potential reversal
         return True
 
-    def _calculate_targets(
-        self, direction: str, sr_level: float
-    ) -> list[Target]:
+    def _calculate_targets(self, direction: str, sr_level: float) -> list[Target]:
         """Calculate profit targets based on direction and level.
 
         Args:
@@ -1055,21 +1021,15 @@ class SetupScanner:
 
         # Check trend alignment
         if direction == "long":
-            strong_closes = sum(
-                1 for b in bars if b.get("close_position") == "high"
-            )
+            strong_closes = sum(1 for b in bars if b.get("close_position") == "high")
         else:
-            strong_closes = sum(
-                1 for b in bars if b.get("close_position") == "low"
-            )
+            strong_closes = sum(1 for b in bars if b.get("close_position") == "low")
 
         if strong_closes >= len(bars) * 0.6:
             factors.append("close position alignment")
 
         # Check body strength
-        strong_bodies = sum(
-            1 for b in bars if b.get("body_strength") == "strong"
-        )
+        strong_bodies = sum(1 for b in bars if b.get("body_strength") == "strong")
         if strong_bodies >= len(bars) * 0.5:
             factors.append("strong body confirmation")
 

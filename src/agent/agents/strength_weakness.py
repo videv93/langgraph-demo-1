@@ -105,14 +105,16 @@ class StrengthWeakness:
         # Trend data
         trend_data = self.config.get("trend_data", {})
         self.trend_direction = trend_data.get("direction", "up")  # "up" | "down"
-        
+
         # Handle current_swing as either dict or float
         current_swing = trend_data.get("current_swing", {})
         if isinstance(current_swing, (int, float)):
             self.current_swing = {"price": current_swing}
         else:
-            self.current_swing = current_swing if isinstance(current_swing, dict) else {}
-        
+            self.current_swing = (
+                current_swing if isinstance(current_swing, dict) else {}
+            )
+
         self.prior_swings = trend_data.get("prior_swings", [])
 
         # Bar data
@@ -142,7 +144,9 @@ class StrengthWeakness:
 
         # Step 4: Calculate combined strength score
         combined_score = self._calculate_combined_score(
-            momentum_analysis["score"], projection_analysis["score"], depth_analysis["score"]
+            momentum_analysis["score"],
+            projection_analysis["score"],
+            depth_analysis["score"],
         )
 
         # Step 5: Determine overall strength rating
@@ -207,10 +211,16 @@ class StrengthWeakness:
         # Bar size score
         avg_body = sum(bar_sizes) / len(bar_sizes) if bar_sizes else 0
         historical_avg = sum(bar_sizes) / len(bar_sizes) if bar_sizes else 1.0
-        bar_size_score = min(100.0, (avg_body / historical_avg) * 100) if historical_avg > 0 else 50.0
+        bar_size_score = (
+            min(100.0, (avg_body / historical_avg) * 100)
+            if historical_avg > 0
+            else 50.0
+        )
 
         # Consecutive bars score
-        consecutive_score = min(100.0, (consecutive_bars / max(len(self.bars), 1)) * 100)
+        consecutive_score = min(
+            100.0, (consecutive_bars / max(len(self.bars), 1)) * 100
+        )
 
         # Acceleration score
         acceleration_score = self._calculate_acceleration_score()
@@ -227,7 +237,9 @@ class StrengthWeakness:
             rating = "weak"
 
         # Description
-        description = self._describe_momentum(momentum_score, consecutive_bars, close_quality)
+        description = self._describe_momentum(
+            momentum_score, consecutive_bars, close_quality
+        )
 
         return {
             "score": round(momentum_score, 1),
@@ -293,12 +305,15 @@ class StrengthWeakness:
         if len(self.bars) < 2:
             return 50.0
 
-        recent_avg = sum(
-            b.get("body_size", 0) for b in self.bars[-3:]
-        ) / min(3, len(self.bars))
-        prior_avg = sum(
-            b.get("body_size", 0) for b in self.bars[-6:-3]
-        ) / min(3, len(self.bars) - 3) if len(self.bars) >= 6 else recent_avg
+        recent_avg = sum(b.get("body_size", 0) for b in self.bars[-3:]) / min(
+            3, len(self.bars)
+        )
+        prior_avg = (
+            sum(b.get("body_size", 0) for b in self.bars[-6:-3])
+            / min(3, len(self.bars) - 3)
+            if len(self.bars) >= 6
+            else recent_avg
+        )
 
         if prior_avg == 0:
             return 50.0
@@ -519,7 +534,9 @@ class StrengthWeakness:
         elif rating == "deep":
             return f"Deep pullback ({retracement_pct:.1f}%): weakness signal, reversal risk"
         else:
-            return "Full retracement: prior swing low/high broken, trend reversal likely"
+            return (
+                "Full retracement: prior swing low/high broken, trend reversal likely"
+            )
 
     def _calculate_combined_score(
         self, momentum_score: float, projection_score: float, depth_score: float
@@ -536,7 +553,9 @@ class StrengthWeakness:
         Returns:
             Combined score (0-100).
         """
-        combined = (momentum_score * 0.40) + (projection_score * 0.30) + (depth_score * 0.30)
+        combined = (
+            (momentum_score * 0.40) + (projection_score * 0.30) + (depth_score * 0.30)
+        )
         return min(100.0, max(0.0, combined))
 
     def _determine_strength_rating(self, combined_score: float) -> str:
@@ -632,10 +651,15 @@ class StrengthWeakness:
             recent_bars = self.bars[-5:]
 
             if self.trend_direction == "up":
-                made_new_high = any(b.get("high", 0) > self.bars[-6].get("high", 0) for b in recent_bars)
+                made_new_high = any(
+                    b.get("high", 0) > self.bars[-6].get("high", 0) for b in recent_bars
+                )
                 return made_new_high and momentum_analysis["score"] < 30
             else:
-                made_new_low = any(b.get("low", 0) < self.bars[-6].get("low", float("inf")) for b in recent_bars)
+                made_new_low = any(
+                    b.get("low", 0) < self.bars[-6].get("low", float("inf"))
+                    for b in recent_bars
+                )
                 return made_new_low and momentum_analysis["score"] < 30
 
         return False
@@ -679,9 +703,13 @@ class StrengthWeakness:
         elif good_for_reversal and weakness_signals.get("reversal_warning", False):
             expected_action = "Reversal warning: multiple weakness signals detected; avoid counter-trend entries"
         elif fade_weakness:
-            expected_action = "Fade weakness at S/R level; enter opposite to weakness direction"
+            expected_action = (
+                "Fade weakness at S/R level; enter opposite to weakness direction"
+            )
         elif overall_rating == "moderate":
-            expected_action = "Neutral strength; context dependent; confirm with HTF bias"
+            expected_action = (
+                "Neutral strength; context dependent; confirm with HTF bias"
+            )
         else:
             expected_action = "Monitor for continuation or reversal based on next bars"
 
