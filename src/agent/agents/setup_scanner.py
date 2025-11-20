@@ -216,10 +216,10 @@ class SetupScanner:
             # Price within 1% of S/R level (approaching)
             if 0 < proximity_pct <= 1.0:
                 # Check for rejection bars at the level
-                rejection_bars = self._identify_rejection_bars(self.bars[-3:])
+                has_rejection_bars = self._identify_rejection_bars(self.bars[-3:])
 
-                if rejection_bars and self._validates_against_trend(
-                    rejection_bars, self.trend_direction
+                if has_rejection_bars and self._validates_against_trend(
+                    self.bars[-3:], self.trend_direction
                 ):
                     # Determine setup direction
                     if self.trend_direction == "up":
@@ -250,7 +250,7 @@ class SetupScanner:
                         "HTF trend alignment",
                         f"rejection bars at {sr_level['type']}",
                     ]
-                    confidence = base_score + len(rejection_bars) * 3
+                    confidence = base_score + (3 if has_rejection_bars else 0)
 
                     # Market condition adjustment
                     if self.trend_stage == "strong":
@@ -666,18 +666,25 @@ class SetupScanner:
 
     # Helper methods for setup detection
 
-    def _identify_rejection_bars(self, bars: list[BarData]) -> list[BarData]:
-        """Identify rejection/pin bars (open strong, close weak or vice versa).
+    def _identify_rejection_bars(self, bars: list[BarData]) -> bool:
+        """Identify if rejection/pin bars exist (open strong, close weak or vice versa).
 
         Args:
             bars: List of price bars to analyze.
 
         Returns:
-            List of identified rejection bars.
+            True if rejection bars are found, False otherwise.
         """
-        rejection = []
+        if not bars:
+            return False
 
         for bar in bars:
+            # Skip bars without required OHLC data
+            if "close" not in bar or "open" not in bar:
+                continue
+            if "high" not in bar or "low" not in bar:
+                continue
+
             body_size = abs(bar["close"] - bar["open"])
             wick_size = max(
                 abs(bar["high"] - bar["close"]), abs(bar["open"] - bar["low"])
@@ -685,9 +692,9 @@ class SetupScanner:
 
             # Rejection bar: large wick relative to body
             if wick_size > body_size * 1.5:
-                rejection.append(bar)
+                return True
 
-        return rejection
+        return False
 
     def _validates_against_trend(self, bars: list[BarData], trend: str) -> bool:
         """Check if bars validate against trend direction.
@@ -985,6 +992,159 @@ class SetupScanner:
         else:
             return "Neutral market conditions"
 
+    def _define_entry_zone(
+        self,
+        direction: str,
+        level: float,
+        confluence_strength: str,
+    ) -> EntryZone:
+        """Define entry zone for a setup.
+
+        Args:
+            direction: "long" or "short".
+            level: Key support/resistance level.
+            confluence_strength: "strong", "moderate", or "weak".
+
+        Returns:
+            EntryZone definition.
+        """
+        # Adjust zone width based on confluence strength
+        if confluence_strength == "strong":
+            width_pct = 0.003  # 0.3%
+        elif confluence_strength == "moderate":
+            width_pct = 0.005  # 0.5%
+        else:
+            width_pct = 0.008  # 0.8%
+
+        if direction == "long":
+            ideal = level * 1.001
+            upper = level * (1 + width_pct)
+            lower = level * (1 - width_pct)
+        else:
+            ideal = level * 0.999
+            upper = level * (1 + width_pct)
+            lower = level * (1 - width_pct)
+
+        return {
+            "upper": upper,
+            "lower": lower,
+            "ideal": ideal,
+            "trigger_bar_pattern": f"{direction} entry at {level}",
+        }
+
+    def _identify_confluence_factors(
+        self,
+        direction: str,
+        level: float,
+        bars: list[BarData],
+    ) -> list[str]:
+        """Identify confluence factors for a setup.
+
+        Args:
+            direction: "long" or "short".
+            level: Key support/resistance level.
+            bars: Price bars to analyze.
+
+        Returns:
+            List of confluence factors identified.
+        """
+        factors = []
+
+        if not bars:
+            return factors
+
+        # Check trend alignment
+        if direction == "long":
+            strong_closes = sum(
+                1 for b in bars if b.get("close_position") == "high"
+            )
+        else:
+            strong_closes = sum(
+                1 for b in bars if b.get("close_position") == "low"
+            )
+
+        if strong_closes >= len(bars) * 0.6:
+            factors.append("close position alignment")
+
+        # Check body strength
+        strong_bodies = sum(
+            1 for b in bars if b.get("body_strength") == "strong"
+        )
+        if strong_bodies >= len(bars) * 0.5:
+            factors.append("strong body confirmation")
+
+        # Check proximity to level
+        bar_closes = [b.get("close", 0) for b in bars]
+        if bar_closes:
+            avg_close = sum(bar_closes) / len(bar_closes)
+            if abs(avg_close - level) / level < 0.01:  # Within 1% of level
+                factors.append("price proximity to level")
+
+        return factors
+
+    def _assess_trapped_trader_potential(
+        self,
+        direction: str,
+        sr_level: float,
+        rejection_bars: bool,
+    ) -> str:
+        """Assess trapped trader potential for a setup.
+
+        Args:
+            direction: "long" or "short".
+            sr_level: Support/resistance level.
+            rejection_bars: Whether rejection bars are present.
+
+        Returns:
+            Assessment: "high", "moderate", or "low".
+        """
+        # Trapped traders more likely with rejection bars
+        if rejection_bars:
+            return "high"
+
+        # Check if we're in strong trend (implies more trapped traders)
+        if self.trend_stage == "strong":
+            return "moderate"
+
+        return "low"
+
+    def _rate_setup_quality(
+        self,
+        probability_score: float,
+        confluence_count: int,
+        risk_reward_ratio: float,
+        min_confluence: int,
+    ) -> str:
+        """Rate the quality of a setup.
+
+        Args:
+            probability_score: Setup probability (0-100).
+            confluence_count: Number of confluence factors.
+            risk_reward_ratio: Risk-to-reward ratio.
+            min_confluence: Minimum confluence factors required.
+
+        Returns:
+            Quality rating: "A", "B", or "C".
+        """
+        # A-rating: high probability + strong confluence + good R:R
+        if (
+            probability_score >= 80
+            and confluence_count >= min_confluence + 1
+            and risk_reward_ratio >= 2.5
+        ):
+            return "A"
+
+        # B-rating: good probability + confluence met + acceptable R:R
+        if (
+            probability_score >= 70
+            and confluence_count >= min_confluence
+            and risk_reward_ratio >= 1.5
+        ):
+            return "B"
+
+        # C-rating: everything else that passes minimum requirements
+        return "C"
+
     def _create_setup(
         self,
         setup_type: SetupType,
@@ -1018,11 +1178,12 @@ class SetupScanner:
             YTCSetup object.
         """
         # Determine quality rating based on confluence and probability
-        quality_rating = "C"
-        if probability_score >= 80 and len(confluence_factors) >= 3:
-            quality_rating = "A"
-        elif probability_score >= 70 and len(confluence_factors) >= 2:
-            quality_rating = "B"
+        quality_rating = self._rate_setup_quality(
+            probability_score=probability_score,
+            confluence_count=len(confluence_factors),
+            risk_reward_ratio=risk_reward_ratio,
+            min_confluence=self.min_confluence,
+        )
 
         # Ready to trade if confluence met and R:R acceptable
         ready = (

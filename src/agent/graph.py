@@ -292,21 +292,21 @@ def economic_calendar_node(state: TradingState) -> TradingState:
     return state
 
 
-def checkpoint_1_node(state: TradingState) -> TradingState:
-    """First checkpoint - pause for human decision on trend analysis.
-
-    Prompts for user approval before proceeding to trend definition.
-    """
-    print("🔵 Checkpoint 1 - Awaiting human input")
-    response = input("Continue to trend analysis? (yes/no): ").strip().lower()
-    approval = response in ["yes", "y", "true", "1"]
-
-    state["human_decisions"].append({"checkpoint": 1, "decision": approval})
-    if not approval:
-        state["session_status"] = "paused"
-        return Command(goto=END)
-
-    return state
+# def checkpoint_1_node(state: TradingState) -> TradingState:
+#      """First checkpoint - pause for human decision on trend analysis.
+#
+#      Prompts for user approval before proceeding to trend definition.
+#      """
+#      print("🔵 Checkpoint 1 - Awaiting human input")
+#      response = input("Continue to trend analysis? (yes/no): ").strip().lower()
+#      approval = response in ["yes", "y", "true", "1"]
+#
+#      state["human_decisions"].append({"checkpoint": 1, "decision": approval})
+#      if not approval:
+#          state["session_status"] = "paused"
+#          return Command(goto=END)
+#
+#      return state
 
 
 def trend_definition_node(state: TradingState) -> TradingState:
@@ -419,12 +419,15 @@ def strength_weakness_node(state: TradingState) -> TradingState:
          trend_direction = "sideways"
 
      # Instantiate and execute the strength and weakness agent
+     swing_structure = state["market_data"].get("swing_structure", {})
+     current_swing_high = swing_structure.get("current_leading_swing_high", 0.0)
+     
      agent = StrengthWeakness(
          config={
              "trend_data": {
                  "direction": "up" if trend_direction == "uptrend" else "down" if trend_direction == "downtrend" else "neutral",
-                 "current_swing": state["market_data"].get("swing_structure", {}).get("current_leading_swing_high", 0.0),
-                 "prior_swings": state["market_data"].get("swing_structure", {}).get("swing_highs", [])[:3],
+                 "current_swing": {"price": current_swing_high} if isinstance(current_swing_high, (int, float)) else current_swing_high,
+                 "prior_swings": swing_structure.get("swing_highs", [])[:3] if isinstance(swing_structure.get("swing_highs", []), list) else [],
              },
              "bar_data": {
                  "current_bars": bars,
@@ -477,54 +480,54 @@ def strength_weakness_node(state: TradingState) -> TradingState:
      return state
 
 
-def checkpoint_2_node(state: TradingState) -> TradingState:
-     """Second checkpoint - pause for setup review.
-
-     Uses interrupt to pause execution and wait for human approval of the setup
-     before proceeding to entry execution.
-     """
-     print("🔵 Checkpoint 2 - Setup Review")
-
-     # Get setup details for approval
-     active_setups = state["market_data"].get("active_setups", [])
-     best_setup = active_setups[0] if active_setups else None
-     
-     setup_info = None
-     if best_setup:
-         entry_zone = best_setup.get("entry_zone", {})
-         stop_loss = best_setup.get("stop_loss", {})
-         targets = best_setup.get("targets", [])
-         tp_price = targets[0].get("price", 0) if targets else 0
-         
-         setup_info = {
-             "setup_type": best_setup.get("type", "UNKNOWN"),
-             "direction": best_setup.get("direction", "unknown"),
-             "entry": entry_zone.get("ideal", 0),
-             "stop_loss": stop_loss.get("price", 0),
-             "take_profit": tp_price,
-             "probability": best_setup.get("probability_score", 0),
-             "quality": best_setup.get("quality_rating", "C"),
-             "rrr": best_setup.get("risk_reward_ratio", 0),
-         }
-
-     # Display setup details for approval
-     if setup_info:
-         print(f"  Setup Type: {setup_info['setup_type']} ({setup_info['direction'].upper()})")
-         print(f"  Entry: {setup_info['entry']:.4f} | SL: {setup_info['stop_loss']:.4f} | TP: {setup_info['take_profit']:.4f}")
-         print(f"  Probability: {setup_info['probability']:.0f}% | Quality: {setup_info['quality']} | R:R: {setup_info['rrr']:.2f}")
-     else:
-         print("  No setups identified.")
-     
-     response = input("Approve setup for execution? (yes/no): ").strip().lower()
-     approval = response in ["yes", "y", "true", "1"]
-
-     state["human_decisions"].append({"checkpoint": 2, "decision": approval, "setup": setup_info})
-     state["setup_approved"] = approval
-
-     if not approval:
-         return Command(goto=END)
-
-     return state
+# def checkpoint_2_node(state: TradingState) -> TradingState:
+#      """Second checkpoint - pause for setup review.
+#
+#      Uses interrupt to pause execution and wait for human approval of the setup
+#      before proceeding to entry execution.
+#      """
+#      print("🔵 Checkpoint 2 - Setup Review")
+#
+#      # Get setup details for approval
+#      active_setups = state["market_data"].get("active_setups", [])
+#      best_setup = active_setups[0] if active_setups else None
+#      
+#      setup_info = None
+#      if best_setup:
+#          entry_zone = best_setup.get("entry_zone", {})
+#          stop_loss = best_setup.get("stop_loss", {})
+#          targets = best_setup.get("targets", [])
+#          tp_price = targets[0].get("price", 0) if targets else 0
+#          
+#          setup_info = {
+#              "setup_type": best_setup.get("type", "UNKNOWN"),
+#              "direction": best_setup.get("direction", "unknown"),
+#              "entry": entry_zone.get("ideal", 0),
+#              "stop_loss": stop_loss.get("price", 0),
+#              "take_profit": tp_price,
+#              "probability": best_setup.get("probability_score", 0),
+#              "quality": best_setup.get("quality_rating", "C"),
+#              "rrr": best_setup.get("risk_reward_ratio", 0),
+#          }
+#
+#      # Display setup details for approval
+#      if setup_info:
+#          print(f"  Setup Type: {setup_info['setup_type']} ({setup_info['direction'].upper()})")
+#          print(f"  Entry: {setup_info['entry']:.4f} | SL: {setup_info['stop_loss']:.4f} | TP: {setup_info['take_profit']:.4f}")
+#          print(f"  Probability: {setup_info['probability']:.0f}% | Quality: {setup_info['quality']} | R:R: {setup_info['rrr']:.2f}")
+#      else:
+#          print("  No setups identified.")
+#      
+#      response = input("Approve setup for execution? (yes/no): ").strip().lower()
+#      approval = response in ["yes", "y", "true", "1"]
+#
+#      state["human_decisions"].append({"checkpoint": 2, "decision": approval, "setup": setup_info})
+#      state["setup_approved"] = approval
+#
+#      if not approval:
+#          return Command(goto=END)
+#
+#      return state
 
 
 def setup_scanner_node(state: TradingState) -> TradingState:
@@ -1103,10 +1106,10 @@ graph_builder.add_node("system_initialization", system_initialization_node)
 graph_builder.add_node("risk_management", risk_management_node)
 graph_builder.add_node("market_structure", market_structure_node)
 graph_builder.add_node("economic_calendar", economic_calendar_node)
-graph_builder.add_node("checkpoint_1", checkpoint_1_node)
+# graph_builder.add_node("checkpoint_1", checkpoint_1_node)  # Commented for testing
 graph_builder.add_node("trend_definition", trend_definition_node)
 graph_builder.add_node("strength_weakness", strength_weakness_node)
-graph_builder.add_node("checkpoint_2", checkpoint_2_node)
+# graph_builder.add_node("checkpoint_2", checkpoint_2_node)  # Commented for testing
 graph_builder.add_node("setup_scanner", setup_scanner_node)
 graph_builder.add_node("entry_execution", entry_execution_node)
 graph_builder.add_node("trade_management", trade_management_node)
@@ -1121,14 +1124,12 @@ graph_builder.add_edge(START, "system_initialization")
 graph_builder.add_edge("system_initialization", "risk_management")
 graph_builder.add_edge("risk_management", "market_structure")
 graph_builder.add_edge("market_structure", "economic_calendar")
-graph_builder.add_edge("economic_calendar", "checkpoint_1")
+graph_builder.add_edge("economic_calendar", "trend_definition")  # Skip checkpoint_1
 
-graph_builder.add_edge("checkpoint_1", "trend_definition")
 graph_builder.add_edge("trend_definition", "strength_weakness")
 graph_builder.add_edge("strength_weakness", "setup_scanner")
 
-graph_builder.add_edge("setup_scanner", "checkpoint_2")
-graph_builder.add_edge("checkpoint_2", "entry_execution")
+graph_builder.add_edge("setup_scanner", "entry_execution")  # Skip checkpoint_2
 graph_builder.add_conditional_edges("entry_execution", route_entry_to_management)
 
 graph_builder.add_edge("trade_management", "exit_execution")

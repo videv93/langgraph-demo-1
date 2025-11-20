@@ -105,7 +105,14 @@ class StrengthWeakness:
         # Trend data
         trend_data = self.config.get("trend_data", {})
         self.trend_direction = trend_data.get("direction", "up")  # "up" | "down"
-        self.current_swing = trend_data.get("current_swing", {})
+        
+        # Handle current_swing as either dict or float
+        current_swing = trend_data.get("current_swing", {})
+        if isinstance(current_swing, (int, float)):
+            self.current_swing = {"price": current_swing}
+        else:
+            self.current_swing = current_swing if isinstance(current_swing, dict) else {}
+        
         self.prior_swings = trend_data.get("prior_swings", [])
 
         # Bar data
@@ -349,7 +356,9 @@ class StrengthWeakness:
         current_distance = abs(current_price - swing_price)
 
         # Get average prior swing distance
-        prior_distances = [s.get("distance", 0) for s in self.prior_swings[-3:]]
+        # Filter to only dict items with get method
+        valid_prior_swings = [s for s in self.prior_swings if isinstance(s, dict)]
+        prior_distances = [s.get("distance", 0) for s in valid_prior_swings[-3:]]
         avg_prior_distance = (
             sum(prior_distances) / len(prior_distances) if prior_distances else 1.0
         )
