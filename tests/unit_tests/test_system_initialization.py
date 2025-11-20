@@ -262,14 +262,15 @@ class TestSystemInitializationRisk:
 class TestSystemInitializationExecute:
     """Test execute method."""
 
-    def test_execute_no_hummingbot_demo_mode(self) -> None:
+    @pytest.mark.asyncio
+    async def test_execute_no_hummingbot_demo_mode(self) -> None:
         """Test execution in demo mode without Hummingbot."""
         config = {
             "exchange": "binance",
             "trading_pair": "ETH-USDT",
         }
         agent = SystemInitialization(config)
-        result = agent.execute()
+        result = await agent.execute()
 
         assert isinstance(result, dict)
         assert result["session_initialized"] is True
@@ -278,7 +279,8 @@ class TestSystemInitializationExecute:
         assert result["system_status"] == "ready"
         assert result["exchange_info"]["demo_mode"] is True
 
-    def test_execute_with_hummingbot_success(self) -> None:
+    @pytest.mark.asyncio
+    async def test_execute_with_hummingbot_success(self) -> None:
         """Test successful execution with Hummingbot."""
         mock_client = MagicMock()
         config = {
@@ -290,15 +292,16 @@ class TestSystemInitializationExecute:
         }
         agent = SystemInitialization(config)
 
-        with patch.object(agent, "_fetch_account_balance", return_value=5000.0):
-            result = agent.execute()
+        with patch.object(agent, "_fetch_account_balance", new_callable=AsyncMock, return_value=5000.0):
+            result = await agent.execute()
 
         assert result["session_initialized"] is True
         assert result["hummingbot_connected"] is True
         assert result["account_balance"] == 5000.0
         assert result["system_status"] == "ready"
 
-    def test_execute_insufficient_balance(self) -> None:
+    @pytest.mark.asyncio
+    async def test_execute_insufficient_balance(self) -> None:
         """Test execution fails with insufficient balance."""
         mock_client = MagicMock()
         config = {
@@ -310,34 +313,36 @@ class TestSystemInitializationExecute:
         }
         agent = SystemInitialization(config)
 
-        with patch.object(agent, "_fetch_account_balance", return_value=50.0):
-            result = agent.execute()
+        with patch.object(agent, "_fetch_account_balance", new_callable=AsyncMock, return_value=50.0):
+            result = await agent.execute()
 
         assert result["session_initialized"] is False
         assert result["system_status"] == "failed"
         assert any("below minimum" in error for error in result["validation_errors"])
 
-    def test_execute_invalid_configuration(self) -> None:
+    @pytest.mark.asyncio
+    async def test_execute_invalid_configuration(self) -> None:
         """Test execution fails with invalid configuration."""
         config = {
             "exchange": "invalid_exchange",
             "trading_pair": "ETH-USDT",
         }
         agent = SystemInitialization(config)
-        result = agent.execute()
+        result = await agent.execute()
 
         assert result["session_initialized"] is False
         assert result["system_status"] == "failed"
         assert any("Configuration validation" in error for error in result["validation_errors"])
 
-    def test_execute_returns_correct_type(self) -> None:
+    @pytest.mark.asyncio
+    async def test_execute_returns_correct_type(self) -> None:
         """Test execute returns SystemInitializationOutput type."""
         config = {
             "exchange": "binance",
             "trading_pair": "ETH-USDT",
         }
         agent = SystemInitialization(config)
-        result = agent.execute()
+        result = await agent.execute()
 
         # Verify all required keys are present
         required_keys = {

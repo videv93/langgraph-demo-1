@@ -51,7 +51,7 @@ class SystemInitialization:
             config.get("trading_pair", "ETH-USDT") if config else "ETH-USDT"
         )
 
-    def execute(self) -> SystemInitializationOutput:
+    async def execute(self) -> SystemInitializationOutput:
         """Execute system initialization with Hummingbot integration.
 
         Returns:
@@ -84,10 +84,9 @@ class SystemInitialization:
                     f"Trading pair {self.trading_pair} not available on {self.exchange}"
                 )
 
-            # Fetch account balance from Hummingbot (synchronously for non-async execute)
+            # Fetch account balance from Hummingbot
             try:
-                import asyncio
-                self.account_balance = asyncio.run(self._fetch_account_balance())
+                self.account_balance = await self._fetch_account_balance()
             except Exception:
                 errors.append("Failed to fetch account balance from Hummingbot")
             
