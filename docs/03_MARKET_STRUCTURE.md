@@ -1,6 +1,7 @@
 # Market Structure Agent (Higher Timeframe)
 
 ## Agent Identity
+
 - **Name**: Market Structure Agent
 - **Role**: Higher timeframe analysis and S/R identification
 - **Type**: Worker Agent
@@ -8,12 +9,13 @@
 - **Priority**: High
 
 ## Agent Purpose
-Identifies support/resistance zones on the higher timeframe (30min) to provide structural context for trading timeframe decisions. Implements YTC's multiple timeframe analysis approach.
+
+Identifies support/resistance zones on the higher timeframe (4H) to provide structural context for trading timeframe decisions. Implements YTC's multiple timeframe analysis approach.
 
 ## Core Responsibilities
 
 1. **S/R Zone Identification**
-   - Detect swing highs/lows on 30min chart
+   - Detect swing highs/lows on 4H chart
    - Mark prior session high/low
    - Identify broken support becoming resistance
    - Calculate zone strength scores
@@ -25,7 +27,7 @@ Identifies support/resistance zones on the higher timeframe (30min) to provide s
    - Track structure evolution
 
 3. **Timeframe Context**
-   - Place 3min action within 30min context
+   - Place 3min action within 4H context
    - Identify trending vs ranging structure
    - Warn of approaching major levels
    - Track breakout/breakdown scenarios
@@ -36,12 +38,12 @@ Identifies support/resistance zones on the higher timeframe (30min) to provide s
 {
   "market_data": {
     "symbol": "string",
-    "timeframe_higher": "30min",
+    "timeframe_higher": "4H",
     "lookback_periods": 100,
     "session_type": "regular|extended"
   },
   "historical_data": {
-    "ohlcv": "DataFrame with 30min candles",
+    "ohlcv": "DataFrame with 4H candles",
     "volume_profile": "optional"
   },
   "configuration": {
@@ -96,12 +98,14 @@ Identifies support/resistance zones on the higher timeframe (30min) to provide s
 ## Tools Required
 
 ### Hummingbot API Tools
+
 ```python
 hummingbot.get_price_history(connector, pair, interval="30m", limit=100)
 hummingbot.get_order_book_snapshot()
 ```
 
 ### Custom Tools
+
 - **pivot_detector**: Identifies swing highs/lows
 - **sr_zone_calculator**: Calculates support/resistance zones
 - **structure_classifier**: Classifies market structure
@@ -160,6 +164,7 @@ def detect_swing_points(ohlc_data, min_bars=3):
 ```
 
 ## Dependencies
+
 - **Before**: System Initialization Agent
 - **After**: Trend Definition Agent
 - **Concurrent**: Economic Calendar Agent

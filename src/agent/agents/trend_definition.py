@@ -111,11 +111,11 @@ class TrendDefinition:
         market_data = self.config.get("market_data", {})
         self.bars = market_data.get("bars", [])
         self.symbol = market_data.get("symbol", "")
-        self.timeframe = market_data.get("timeframe", "15min")
+        self.timeframe = market_data.get("timeframe", "15m")
 
         # HTF context
         htf_context = self.config.get("higher_timeframe_context", {})
-        self.htf_timeframe = htf_context.get("htf_timeframe", "30min")
+        self.htf_timeframe = htf_context.get("htf_timeframe", "4H")
         self.htf_trend_direction = htf_context.get("htf_trend_direction", "sideways")
         self.htf_resistance = htf_context.get("htf_resistance", 0.0)
         self.htf_support = htf_context.get("htf_support", 0.0)
@@ -206,10 +206,9 @@ class TrendDefinition:
             next_bar = self.bars[i + 1]
 
             # Swing high: current high > both neighbors
-            if (
-                current.get("high", 0) > prev.get("high", 0)
-                and current.get("high", 0) > next_bar.get("high", 0)
-            ):
+            if current.get("high", 0) > prev.get("high", 0) and current.get(
+                "high", 0
+            ) > next_bar.get("high", 0):
                 swings.append(
                     {
                         "type": "swing_high",
@@ -222,10 +221,9 @@ class TrendDefinition:
                 )
 
             # Swing low: current low < both neighbors
-            elif (
-                current.get("low", 0) < prev.get("low", 0)
-                and current.get("low", 0) < next_bar.get("low", 0)
-            ):
+            elif current.get("low", 0) < prev.get("low", 0) and current.get(
+                "low", 0
+            ) < next_bar.get("low", 0):
                 swings.append(
                     {
                         "type": "swing_low",
@@ -484,7 +482,9 @@ class TrendDefinition:
 
         return tf_dir == htf_dir
 
-    def _describe_alignment(self, trend_direction: TrendDirection, aligned: bool) -> str:
+    def _describe_alignment(
+        self, trend_direction: TrendDirection, aligned: bool
+    ) -> str:
         """Build alignment description string.
 
         Args:
@@ -570,14 +570,18 @@ class TrendDefinition:
                 for i in range(1, len(swing_lows)):
                     if swing_lows[i]["price"] < swing_lows[i - 1]["price"]:
                         last_break_ts = swing_lows[i].get("timestamp")
-                        break_description = f"LL formed in uptrend at {swing_lows[i]['price']}"
+                        break_description = (
+                            f"LL formed in uptrend at {swing_lows[i]['price']}"
+                        )
 
             elif trend == TrendDirection.DOWNTREND:
                 swing_highs = [s for s in swings if s["type"] == "swing_high"]
                 for i in range(1, len(swing_highs)):
                     if swing_highs[i]["price"] > swing_highs[i - 1]["price"]:
                         last_break_ts = swing_highs[i].get("timestamp")
-                        break_description = f"HH formed in downtrend at {swing_highs[i]['price']}"
+                        break_description = (
+                            f"HH formed in downtrend at {swing_highs[i]['price']}"
+                        )
 
         return {
             "structure_intact": structure_intact,

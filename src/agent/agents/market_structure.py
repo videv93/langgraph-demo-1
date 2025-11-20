@@ -74,8 +74,8 @@ class MarketStructure:
                     current_price, ohlc_data, min_swing_bars, sr_zone_thickness_pct
         """
         self.config = config or {}
+        self.timeframe = self.config.get("timeframe", "4H")
         self.instrument = self.config.get("instrument", "ETH-USDT")
-        self.timeframe = self.config.get("timeframe", "30m")
         self.lookback_periods = self.config.get("lookback_periods", 100)
         self.current_price = self.config.get("current_price", 0.0)
         self.ohlc_data = self.config.get("ohlc_data", [])
@@ -97,8 +97,8 @@ class MarketStructure:
         # Detect swing points using scipy
         swing_highs, swing_lows = self._detect_swing_points(highs, lows)
 
-        # Analyze trend structure
-        trend_structure = self._analyze_trend_structure(closes)
+        # Analyze trend structure using YTC swing analysis methodology
+        trend_structure = self._analyze_trend_structure(closes, highs, lows)
 
         # Identify support and resistance zones
         support_zones = self._calculate_zones(swing_lows, "support")
@@ -167,8 +167,12 @@ class MarketStructure:
         lows_array = np.array(lows)
 
         # Find local maxima and minima
-        swing_high_indices = argrelextrema(highs_array, np.greater, order=self.min_swing_bars)[0]
-        swing_low_indices = argrelextrema(lows_array, np.less, order=self.min_swing_bars)[0]
+        swing_high_indices = argrelextrema(
+            highs_array, np.greater, order=self.min_swing_bars
+        )[0]
+        swing_low_indices = argrelextrema(
+            lows_array, np.less, order=self.min_swing_bars
+        )[0]
 
         swing_highs = [
             {
@@ -188,31 +192,81 @@ class MarketStructure:
 
         return swing_highs, swing_lows
 
-    def _analyze_trend_structure(self, closes: list[float]) -> TrendDirection:
-        """Determine trend structure from price action using talib SMA.
+    def _analyze_trend_structure(
+        self, closes: list[float], highs: list[float] = None, lows: list[float] = None
+    ) -> TrendDirection:
+        """Determine trend structure using YTC swing analysis methodology.
+
+        Classifies trend based on swing patterns:
+        - Uptrend: Series of higher highs (HH) and higher lows (HL)
+        - Downtrend: Series of lower highs (LH) and lower lows (LL)
+        - Sideways: No clear directional pattern
 
         Args:
             closes: List of closing prices.
+            highs: List of high prices (optional, extracted from ohlc_data if not provided).
+            lows: List of low prices (optional, extracted from ohlc_data if not provided).
 
         Returns:
-            TrendDirection enum value.
+            TrendDirection enum value (UPTREND, DOWNTREND, or SIDEWAYS).
         """
-        if len(closes) < 25:
+        if len(closes) < 5:
             return TrendDirection.SIDEWAYS
 
-        close_array = np.array(closes, dtype=np.float64)
+        # Extract highs and lows if not provided
+        if highs is None or lows is None:
+            highs, lows, _ = self._extract_price_data()
 
-        # Calculate moving averages using talib
-        short_ma = talib.SMA(close_array, timeperiod=10)
-        medium_ma = talib.SMA(close_array, timeperiod=25)
+        if len(highs) < 5 or len(lows) < 5:
+            return TrendDirection.SIDEWAYS
 
-        current = closes[-1]
-        short_ma_current = short_ma[-1]
-        medium_ma_current = medium_ma[-1]
+        # Detect swing points using scipy (same method as used elsewhere)
+        swing_highs, swing_lows = self._detect_swing_points(highs, lows)
 
-        if current > short_ma_current > medium_ma_current:
+        if len(swing_highs) < 2 or len(swing_lows) < 2:
+            return TrendDirection.SIDEWAYS
+
+        # Extract last 4 swings to analyze pattern
+        recent_swings = []
+
+        # Get indices of recent swing highs and lows
+        for sh in swing_highs[-3:]:
+            recent_swings.append(("high", sh["index"], sh["price"]))
+        for sl in swing_lows[-3:]:
+            recent_swings.append(("low", sl["index"], sl["price"]))
+
+        # Sort by index to get chronological order
+        recent_swings.sort(key=lambda x: x[1])
+
+        if len(recent_swings) < 4:
+            return TrendDirection.SIDEWAYS
+
+        # Analyze last 3 swings to determine trend pattern
+        last_3_swings = recent_swings[-3:]
+
+        # Check for uptrend pattern: HH and HL (recent swing high > prior swing high, recent swing low > prior swing low)
+        uptrend_pattern = False
+        downtrend_pattern = False
+
+        if len(swing_highs) >= 2 and len(swing_lows) >= 2:
+            # Get last two swing highs and lows
+            last_sh = swing_highs[-1]["price"]
+            prev_sh = swing_highs[-2]["price"] if len(swing_highs) >= 2 else 0
+            last_sl = swing_lows[-1]["price"]
+            prev_sl = swing_lows[-2]["price"] if len(swing_lows) >= 2 else 0
+
+            # Uptrend: HH and HL
+            if last_sh > prev_sh and last_sl > prev_sl:
+                uptrend_pattern = True
+
+            # Downtrend: LH and LL
+            if last_sh < prev_sh and last_sl < prev_sl:
+                downtrend_pattern = True
+
+        # Determine trend direction
+        if uptrend_pattern:
             return TrendDirection.UPTREND
-        elif current < short_ma_current < medium_ma_current:
+        elif downtrend_pattern:
             return TrendDirection.DOWNTREND
         else:
             return TrendDirection.SIDEWAYS
@@ -241,16 +295,18 @@ class MarketStructure:
             touches = self._count_touches(level, zone_thickness)
             strength = min(10, 3 + touches)  # Base 3, +1 per touch, max 10
 
-            zones.append({
-                "level": round(level, 2),
-                "strength": strength,
-                "type": f"swing_{zone_type[:-1]}",  # swing_support or swing_resistance
-                "touches": touches,
-                "zone_range": [
-                    round(level - zone_thickness, 2),
-                    round(level + zone_thickness, 2),
-                ],
-            })
+            zones.append(
+                {
+                    "level": round(level, 2),
+                    "strength": strength,
+                    "type": f"swing_{zone_type[:-1]}",  # swing_support or swing_resistance
+                    "touches": touches,
+                    "zone_range": [
+                        round(level - zone_thickness, 2),
+                        round(level + zone_thickness, 2),
+                    ],
+                }
+            )
 
         return sorted(zones, key=lambda z: z["level"])
 
@@ -274,8 +330,9 @@ class MarketStructure:
 
         # Convert to pandas Series for vectorized comparison
         close_series = pd.Series(closes)
-        touches = ((close_series >= level - thickness) & 
-                   (close_series <= level + thickness)).sum()
+        touches = (
+            (close_series >= level - thickness) & (close_series <= level + thickness)
+        ).sum()
 
         return int(touches)
 
@@ -393,14 +450,18 @@ class MarketStructure:
             indicators["rsi"] = float(rsi[-1])
 
         # MACD
-        macd, signal, hist = talib.MACD(close_array, fastperiod=12, slowperiod=26, signalperiod=9)
+        macd, signal, hist = talib.MACD(
+            close_array, fastperiod=12, slowperiod=26, signalperiod=9
+        )
         if not np.isnan(macd[-1]):
             indicators["macd"] = float(macd[-1])
             indicators["macd_signal"] = float(signal[-1])
             indicators["macd_histogram"] = float(hist[-1])
 
         # Bollinger Bands
-        upper, middle, lower = talib.BBANDS(close_array, timeperiod=20, nbdevup=2, nbdevdn=2)
+        upper, middle, lower = talib.BBANDS(
+            close_array, timeperiod=20, nbdevup=2, nbdevdn=2
+        )
         if not np.isnan(upper[-1]):
             indicators["bb_upper"] = float(upper[-1])
             indicators["bb_middle"] = float(middle[-1])
