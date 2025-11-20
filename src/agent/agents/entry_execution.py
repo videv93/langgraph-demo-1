@@ -2,6 +2,11 @@
 
 from datetime import datetime
 from typing import Any, TypedDict
+from .utils.hummingbot import (
+    fetch_current_price,
+    fetch_market_data,
+    place_order,
+)
 
 
 class TradePosition(TypedDict):
@@ -45,7 +50,8 @@ class EntryExecution:
 
         Args:
             config: Configuration with setup, account, and trade parameters.
-                    Expected keys: best_setup, account_balance, position_size_limit, etc.
+                    Expected keys: best_setup, account_balance, position_size_limit,
+                    hummingbot_client, trading_pair, exchange, etc.
         """
         self.config = config or {}
         self.best_setup = self.config.get("best_setup")
@@ -53,9 +59,12 @@ class EntryExecution:
         self.position_size_limit = self.config.get("position_size_limit", 2000.0)
         self.current_price = self.config.get("current_price", 0.0)
         self.entry_bias = self.config.get("entry_bias", "neutral")
+        self.hummingbot_client = self.config.get("hummingbot_client")
+        self.trading_pair = self.config.get("trading_pair", "ETH-USDT")
+        self.exchange = self.config.get("exchange", "binance_perpetual_testnet")
 
-    def execute(self) -> EntryExecutionOutput:
-        """Execute trade entry.
+    async def execute(self) -> EntryExecutionOutput:
+        """Execute trade entry with real market data and order placement.
 
         Returns:
             EntryExecutionOutput with position details or error message.
@@ -68,6 +77,9 @@ class EntryExecution:
                 "execution_message": "No setup provided for entry execution",
                 "execution_timestamp": datetime.utcnow().isoformat(),
             }
+
+        # Fetch real current price from market
+        await self._update_current_price()
 
         # Calculate position size
         position_size = self._calculate_position_size()
@@ -94,11 +106,22 @@ class EntryExecution:
                 "execution_timestamp": datetime.utcnow().isoformat(),
             }
 
+        # Place actual order
+        order_result = await self._place_entry_order(trade_position)
+        if not order_result:
+            return {
+                "execution_complete": True,
+                "entry_successful": False,
+                "trade_position": None,
+                "execution_message": "Failed to place entry order",
+                "execution_timestamp": datetime.utcnow().isoformat(),
+            }
+
         return {
             "execution_complete": True,
             "entry_successful": True,
             "trade_position": trade_position,
-            "execution_message": f"Entry executed: {self.best_setup['setup_type'].value} setup at {trade_position['entry_price']}",
+            "execution_message": f"Entry executed: {trade_position['setup_type']} setup at {trade_position['entry_price']} | Order ID: {order_result.get('order_id')}",
             "execution_timestamp": datetime.utcnow().isoformat(),
         }
 
@@ -111,8 +134,13 @@ class EntryExecution:
         if not self.best_setup:
             return 0.0
 
-        entry_price = self.best_setup["entry_level"]
-        stop_loss = self.best_setup["stop_loss_level"]
+        # Extract from entry_zone ideal or use current price
+        entry_zone = self.best_setup.get("entry_zone", {})
+        entry_price = entry_zone.get("ideal", self.current_price)
+        
+        # Extract from stop_loss
+        stop_loss_data = self.best_setup.get("stop_loss", {})
+        stop_loss = stop_loss_data.get("price", 0.0)
 
         if entry_price <= 0 or stop_loss <= 0:
             return 0.0
@@ -152,26 +180,33 @@ class EntryExecution:
         Returns:
             TradePosition object.
         """
-        entry_price = self.best_setup["entry_level"]
+        # Extract entry price from entry_zone
+        entry_zone = self.best_setup.get("entry_zone", {})
+        entry_price = entry_zone.get("ideal", self.current_price)
         position_value = position_size * entry_price
 
-        # Determine entry direction
-        if self.best_setup["entry_strategy"].startswith("Buy") or self.entry_bias == "long":
-            entry_type = "long"
-        else:
-            entry_type = "short"
+        # Determine entry direction from setup
+        direction = self.best_setup.get("direction", "long")
+        entry_type = direction if direction in ["long", "short"] else self.entry_bias
+
+        # Extract stop loss and targets
+        stop_loss_data = self.best_setup.get("stop_loss", {})
+        stop_loss = stop_loss_data.get("price", 0.0)
+        
+        targets = self.best_setup.get("targets", [])
+        take_profit = targets[0].get("price", 0.0) if targets else 0.0
 
         return {
             "trade_id": self._generate_trade_id(),
             "entry_price": round(entry_price, 2),
             "entry_time": datetime.utcnow().isoformat(),
-            "stop_loss": round(self.best_setup["stop_loss_level"], 2),
-            "take_profit": round(self.best_setup["take_profit_level"], 2),
+            "stop_loss": round(stop_loss, 2),
+            "take_profit": round(take_profit, 2),
             "position_size": round(position_size, 4),
             "position_value": round(position_value, 2),
             "entry_type": entry_type,
-            "setup_type": self.best_setup["setup_type"].value,
-            "risk_reward_ratio": self.best_setup["risk_reward_ratio"],
+            "setup_type": str(self.best_setup.get("type", "none")),
+            "risk_reward_ratio": round(self.best_setup.get("risk_reward_ratio", 1.5), 2),
         }
 
     def _validate_position(self, position: TradePosition) -> bool:
@@ -226,3 +261,41 @@ class EntryExecution:
         import uuid
 
         return f"TRD-{uuid.uuid4().hex[:8].upper()}"
+
+    async def _update_current_price(self) -> None:
+        """Fetch current market price from Hummingbot.
+
+        Updates self.current_price with real market data.
+        """
+        if not self.hummingbot_client:
+            return
+
+        price = await fetch_current_price(
+            self.hummingbot_client,
+            trading_pair=self.trading_pair,
+            exchange=self.exchange
+        )
+        if price > 0:
+            self.current_price = price
+
+    async def _place_entry_order(self, position: TradePosition) -> dict[str, Any] | None:
+        """Place entry order via Hummingbot.
+
+        Args:
+            position: Trade position with entry details.
+
+        Returns:
+            Order result dictionary or None if placement failed.
+        """
+        if not self.hummingbot_client:
+            return None
+
+        order_result = await place_order(
+            self.hummingbot_client,
+            trading_pair=self.trading_pair,
+            side=position["entry_type"],
+            quantity=position["position_size"],
+            price=position["entry_price"],
+            exchange=self.exchange
+        )
+        return order_result
