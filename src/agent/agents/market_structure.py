@@ -1,8 +1,10 @@
 """Market structure analysis agent for identifying support/resistance and key levels."""
 
-import random
+from datetime import datetime
 from enum import Enum
 from typing import Any, TypedDict
+import numpy as np
+from scipy.signal import argrelextrema
 
 
 class TrendDirection(str, Enum):
@@ -11,31 +13,54 @@ class TrendDirection(str, Enum):
     UPTREND = "uptrend"
     DOWNTREND = "downtrend"
     SIDEWAYS = "sideways"
-    UNKNOWN = "unknown"
+
+
+class SRZone(TypedDict):
+    """Support/Resistance zone definition."""
+
+    level: float
+    strength: int
+    type: str
+    touches: int
+    zone_range: list[float]
+
+
+class StructuralFramework(TypedDict):
+    """Market structural framework."""
+
+    trend_structure: TrendDirection
+    resistance_zones: list[SRZone]
+    support_zones: list[SRZone]
+    prior_session: dict[str, float]
+
+
+class CurrentContext(TypedDict):
+    """Current price context relative to structure."""
+
+    price_location: str
+    nearest_resistance: float
+    nearest_support: float
+    distance_to_resistance_pct: float
+    distance_to_support_pct: float
 
 
 class MarketStructureOutput(TypedDict):
     """Output from market structure analysis."""
 
     analysis_complete: bool
-    trend_direction: TrendDirection
-    current_price: float
-    support_level: float
-    resistance_level: float
-    market_volatility: str
-    key_price_levels: list[float]
-    price_history: list[float]
+    structural_framework: StructuralFramework
+    current_context: CurrentContext
     analysis_timestamp: str
 
 
 class MarketStructure:
-    """Analyze market structure to identify key price levels and trends.
+    """Analyze market structure to identify support/resistance zones and trends.
 
-    Performs analysis including:
-    - Support and resistance level identification
-    - Trend direction determination
-    - Volatility assessment
-    - Key price level identification
+    Implements YTC's multiple timeframe analysis approach with:
+    - Swing point detection using scipy.signal.argrelextrema
+    - Support/resistance zone identification with strength scoring
+    - Trend structure classification
+    - Prior session level tracking
     """
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -44,166 +69,296 @@ class MarketStructure:
         Args:
             config: Optional configuration with market parameters.
                     Expected keys: instrument, timeframe, lookback_periods,
-                    current_price, price_history, market_data, hummingbot_client
+                    current_price, ohlc_data, min_swing_bars, sr_zone_thickness_pct
         """
         self.config = config or {}
         self.instrument = self.config.get("instrument", "ETH-USDT")
-        self.timeframe = self.config.get("timeframe", "4H")
+        self.timeframe = self.config.get("timeframe", "30m")
         self.lookback_periods = self.config.get("lookback_periods", 100)
-        self.base_price = self.config.get("base_price")
         self.current_price = self.config.get("current_price", 0.0)
-        self.price_history = self.config.get("price_history", [])
-        self.market_data = self.config.get("market_data", {})
-        self.hummingbot_client = self.config.get("hummingbot_client")
+        self.ohlc_data = self.config.get("ohlc_data", [])
+        self.min_swing_bars = self.config.get("min_swing_bars", 3)
+        self.sr_zone_thickness_pct = self.config.get("sr_zone_thickness_pct", 0.5)
 
     def execute(self) -> MarketStructureOutput:
-        """Execute market structure analysis using real price data from Hummingbot.
+        """Execute market structure analysis.
 
         Returns:
-            MarketStructureOutput with identified structure and levels.
+            MarketStructureOutput with structural framework and current context.
         """
-        from datetime import datetime
+        # Extract price data from OHLC
+        highs, lows, closes = self._extract_price_data()
 
-        # Extract real price history from Hummingbot
-        price_history = []
-        if self.price_history:
-            price_history = [
-                float(candle.get("close", 0))
-                if isinstance(candle, dict)
-                else float(candle)
-                for candle in self.price_history
-            ]
+        if not closes or self.current_price <= 0:
+            return self._empty_output()
 
-        # Use real current price from Hummingbot
-        current_price = self.current_price if self.current_price > 0 else 0.0
+        # Detect swing points using scipy
+        swing_highs, swing_lows = self._detect_swing_points(highs, lows)
 
-        # Analyze trend direction
-        trend = self._analyze_trend(price_history)
+        # Analyze trend structure
+        trend_structure = self._analyze_trend_structure(closes)
 
-        # Identify support and resistance levels
-        support, resistance = self._identify_support_resistance(price_history, current_price)
+        # Identify support and resistance zones
+        support_zones = self._calculate_zones(swing_lows, "support")
+        resistance_zones = self._calculate_zones(swing_highs, "resistance")
 
-        # Assess market volatility
-        volatility = self._assess_volatility(price_history)
+        # Get prior session levels
+        prior_session = self._get_prior_session_levels(highs, lows, closes)
 
-        # Identify key price levels
-        key_levels = self._identify_key_levels(support, resistance)
+        # Calculate current context
+        current_context = self._calculate_current_context(
+            support_zones, resistance_zones
+        )
 
         return {
-            "analysis_complete": bool(price_history and current_price > 0),
-            "trend_direction": trend,
-            "current_price": current_price,
-            "support_level": support,
-            "resistance_level": resistance,
-            "market_volatility": volatility,
-            "key_price_levels": key_levels,
-            "price_history": price_history,
+            "analysis_complete": True,
+            "structural_framework": {
+                "trend_structure": trend_structure,
+                "resistance_zones": resistance_zones,
+                "support_zones": support_zones,
+                "prior_session": prior_session,
+            },
+            "current_context": current_context,
             "analysis_timestamp": datetime.utcnow().isoformat(),
         }
 
-    def _analyze_trend(self, price_history: list[float]) -> TrendDirection:
-        """Determine the current market trend direction from price history.
-
-        Args:
-            price_history: List of historical prices.
+    def _extract_price_data(self) -> tuple[list[float], list[float], list[float]]:
+        """Extract OHLC data from config.
 
         Returns:
-            TrendDirection indicating uptrend, downtrend, sideways, or unknown.
+            Tuple of (highs, lows, closes) as float lists.
         """
-        if len(price_history) < 10:
-            return TrendDirection.UNKNOWN
+        highs = []
+        lows = []
+        closes = []
 
-        # Use different timeframes for trend analysis
-        short_period = min(10, len(price_history))
-        medium_period = min(25, len(price_history))
+        for candle in self.ohlc_data:
+            if isinstance(candle, dict):
+                highs.append(float(candle.get("high", 0)))
+                lows.append(float(candle.get("low", 0)))
+                closes.append(float(candle.get("close", 0)))
+            else:
+                # Handle array-like structure [o, h, l, c, v]
+                if len(candle) >= 4:
+                    highs.append(float(candle[1]))
+                    lows.append(float(candle[2]))
+                    closes.append(float(candle[3]))
 
-        # Calculate simple moving averages
-        short_avg = sum(price_history[-short_period:]) / short_period
-        medium_avg = sum(price_history[-medium_period:]) / medium_period
-        
-        current_price = price_history[-1]
+        return highs, lows, closes
 
-        # Determine trend based on price position relative to moving averages
-        if current_price > short_avg > medium_avg:
+    def _detect_swing_points(
+        self, highs: list[float], lows: list[float]
+    ) -> tuple[list[dict], list[dict]]:
+        """Detect swing highs and lows using scipy.signal.argrelextrema.
+
+        Args:
+            highs: List of high prices.
+            lows: List of low prices.
+
+        Returns:
+            Tuple of (swing_highs, swing_lows) as list of dicts.
+        """
+        if len(highs) < self.min_swing_bars * 2 + 1:
+            return [], []
+
+        highs_array = np.array(highs)
+        lows_array = np.array(lows)
+
+        # Find local maxima and minima
+        swing_high_indices = argrelextrema(highs_array, np.greater, order=self.min_swing_bars)[0]
+        swing_low_indices = argrelextrema(lows_array, np.less, order=self.min_swing_bars)[0]
+
+        swing_highs = [
+            {
+                "index": int(idx),
+                "price": float(highs[idx]),
+            }
+            for idx in swing_high_indices
+        ]
+
+        swing_lows = [
+            {
+                "index": int(idx),
+                "price": float(lows[idx]),
+            }
+            for idx in swing_low_indices
+        ]
+
+        return swing_highs, swing_lows
+
+    def _analyze_trend_structure(self, closes: list[float]) -> TrendDirection:
+        """Determine trend structure from price action.
+
+        Args:
+            closes: List of closing prices.
+
+        Returns:
+            TrendDirection enum value.
+        """
+        if len(closes) < 10:
+            return TrendDirection.SIDEWAYS
+
+        short_ma = sum(closes[-10:]) / 10
+        medium_ma = sum(closes[-25:]) / 25
+        current = closes[-1]
+
+        if current > short_ma > medium_ma:
             return TrendDirection.UPTREND
-        elif current_price < short_avg < medium_avg:
+        elif current < short_ma < medium_ma:
             return TrendDirection.DOWNTREND
         else:
             return TrendDirection.SIDEWAYS
 
-    def _identify_support_resistance(
-        self, price_history: list[float], current_price: float = 0.0
-    ) -> tuple[float, float]:
-        """Identify support and resistance price levels from real price data.
+    def _calculate_zones(
+        self, swing_points: list[dict], zone_type: str
+    ) -> list[SRZone]:
+        """Calculate support/resistance zones from swing points.
 
         Args:
-            price_history: List of historical prices.
-            current_price: Current price for reference.
+            swing_points: List of swing point dicts.
+            zone_type: "support" or "resistance".
 
         Returns:
-            Tuple of (support_level, resistance_level).
+            List of SRZone dicts with strength scoring.
         """
-        if not price_history:
-            return 0.0, 0.0
+        if not swing_points:
+            return []
 
-        # Use last 100 candles for more recent support/resistance
-        lookback = min(100, len(price_history))
-        recent_prices = price_history[-lookback:]
-        
-        min_price = min(recent_prices)
-        max_price = max(recent_prices)
+        zones = []
+        for point in swing_points[-5:]:  # Use last 5 swing points
+            level = point["price"]
+            zone_thickness = level * (self.sr_zone_thickness_pct / 100)
 
-        # Calculate support and resistance with dynamic margins
-        price_range = max_price - min_price
-        margin = max(0.005, price_range * 0.01)  # At least 0.5% or 1% of range
-        
-        support = round(min_price - margin, 2)
-        resistance = round(max_price + margin, 2)
+            # Calculate strength based on price proximity
+            touches = self._count_touches(level, zone_thickness)
+            strength = min(10, 3 + touches)  # Base 3, +1 per touch, max 10
 
-        return support, resistance
+            zones.append({
+                "level": round(level, 2),
+                "strength": strength,
+                "type": f"swing_{zone_type[:-1]}",  # swing_support or swing_resistance
+                "touches": touches,
+                "zone_range": [
+                    round(level - zone_thickness, 2),
+                    round(level + zone_thickness, 2),
+                ],
+            })
 
-    def _assess_volatility(self, price_history: list[float]) -> str:
-        """Assess current market volatility.
+        return sorted(zones, key=lambda z: z["level"])
+
+    def _count_touches(self, level: float, thickness: float) -> int:
+        """Count how many times price touched a zone.
 
         Args:
-            price_history: List of historical prices.
+            level: Zone center level.
+            thickness: Zone half-width.
 
         Returns:
-            Volatility assessment: "low", "medium", or "high".
+            Number of touches.
         """
-        if len(price_history) < 20:
-            return "medium"
+        if not self.ohlc_data:
+            return 0
 
-        recent_prices = price_history[-20:]
-        avg_price = sum(recent_prices) / len(recent_prices)
+        closes = [
+            float(c.get("close", 0) if isinstance(c, dict) else c[3])
+            for c in self.ohlc_data
+        ]
 
-        # Calculate percentage changes
-        changes = []
-        for i in range(1, len(recent_prices)):
-            pct_change = abs((recent_prices[i] - recent_prices[i - 1]) / recent_prices[i - 1]) * 100
-            changes.append(pct_change)
+        touches = 0
+        for close in closes:
+            if level - thickness <= close <= level + thickness:
+                touches += 1
 
-        avg_change = sum(changes) / len(changes) if changes else 0
+        return touches
 
-        if avg_change < 0.8:
-            return "low"
-        elif avg_change > 1.5:
-            return "high"
+    def _get_prior_session_levels(
+        self, highs: list[float], lows: list[float], closes: list[float]
+    ) -> dict[str, float]:
+        """Get prior session's high, low, and close.
+
+        Args:
+            highs: List of high prices.
+            lows: List of low prices.
+            closes: List of close prices.
+
+        Returns:
+            Dict with prior_high, prior_low, prior_close.
+        """
+        if len(closes) < 2:
+            return {"high": 0.0, "low": 0.0, "close": 0.0}
+
+        # Use previous candle as "prior session"
+        return {
+            "high": round(highs[-2], 2) if len(highs) >= 2 else 0.0,
+            "low": round(lows[-2], 2) if len(lows) >= 2 else 0.0,
+            "close": round(closes[-2], 2) if len(closes) >= 2 else 0.0,
+        }
+
+    def _calculate_current_context(
+        self, support_zones: list[SRZone], resistance_zones: list[SRZone]
+    ) -> CurrentContext:
+        """Calculate current price context relative to structure.
+
+        Args:
+            support_zones: List of support zones.
+            resistance_zones: List of resistance zones.
+
+        Returns:
+            CurrentContext dict with price location and distances.
+        """
+        nearest_support = support_zones[-1]["level"] if support_zones else 0.0
+        nearest_resistance = resistance_zones[0]["level"] if resistance_zones else 0.0
+
+        dist_to_resist_pct = (
+            ((nearest_resistance - self.current_price) / self.current_price * 100)
+            if self.current_price > 0 and nearest_resistance > 0
+            else 0.0
+        )
+
+        dist_to_support_pct = (
+            ((self.current_price - nearest_support) / self.current_price * 100)
+            if self.current_price > 0 and nearest_support > 0
+            else 0.0
+        )
+
+        # Determine price location
+        if nearest_resistance > 0 and self.current_price >= nearest_resistance * 0.99:
+            price_location = "at_resistance"
+        elif nearest_support > 0 and self.current_price <= nearest_support * 1.01:
+            price_location = "at_support"
+        elif nearest_support > 0 and nearest_resistance > 0:
+            price_location = "in_range"
         else:
-            return "medium"
+            price_location = "breakout"
 
-    def _identify_key_levels(self, support: float, resistance: float) -> list[float]:
-        """Identify key price levels for trading decisions.
+        return {
+            "price_location": price_location,
+            "nearest_resistance": round(nearest_resistance, 2),
+            "nearest_support": round(nearest_support, 2),
+            "distance_to_resistance_pct": round(dist_to_resist_pct, 2),
+            "distance_to_support_pct": round(dist_to_support_pct, 2),
+        }
 
-        Args:
-            support: Support price level.
-            resistance: Resistance price level.
+    def _empty_output(self) -> MarketStructureOutput:
+        """Return empty output when analysis cannot be completed.
 
         Returns:
-            List of key price levels.
+            MarketStructureOutput with empty/default values.
         """
-        # Placeholder: in production, calculate Fibonacci retracements,
-        # pivot points, and other technical levels
-        pivot = (support + resistance) / 2
-        key_levels = [support, pivot, resistance]
-        return sorted(key_levels)
+        return {
+            "analysis_complete": False,
+            "structural_framework": {
+                "trend_structure": TrendDirection.SIDEWAYS,
+                "resistance_zones": [],
+                "support_zones": [],
+                "prior_session": {"high": 0.0, "low": 0.0, "close": 0.0},
+            },
+            "current_context": {
+                "price_location": "unknown",
+                "nearest_resistance": 0.0,
+                "nearest_support": 0.0,
+                "distance_to_resistance_pct": 0.0,
+                "distance_to_support_pct": 0.0,
+            },
+            "analysis_timestamp": datetime.utcnow().isoformat(),
+        }

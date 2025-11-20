@@ -108,39 +108,55 @@ hummingbot.get_order_book_snapshot()
 
 ## Skills Required
 
-### SKILL: Swing Point Detection (YTC Method)
+### SKILL: Swing Point Detection (SciPy Method)
 
 ```python
+from scipy.signal import argrelextrema
+import numpy as np
+
 def detect_swing_points(ohlc_data, min_bars=3):
     """
-    YTC Swing Detection:
-    - Swing High: High point with lower highs on both sides
-    - Swing Low: Low point with higher lows on both sides
+    Swing point detection using scipy.signal.argrelextrema.
+    
+    Identifies local maxima (swing highs) and minima (swing lows)
+    using relative extrema with configurable order parameter.
+    
+    Args:
+        ohlc_data: DataFrame with 'high' and 'low' columns
+        min_bars: Order parameter for extrema detection (lookback/lookahead bars)
+    
+    Returns:
+        dict with 'swing_highs' and 'swing_lows' lists
     """
-    swing_highs = []
-    swing_lows = []
+    highs = ohlc_data['high'].values
+    lows = ohlc_data['low'].values
     
-    for i in range(min_bars, len(ohlc_data) - min_bars):
-        # Check for swing high
-        is_swing_high = True
-        current_high = ohlc_data[i]['high']
-        
-        for j in range(1, min_bars + 1):
-            if ohlc_data[i-j]['high'] >= current_high or ohlc_data[i+j]['high'] >= current_high:
-                is_swing_high = False
-                break
-        
-        if is_swing_high:
-            swing_highs.append({
-                'index': i,
-                'price': current_high,
-                'timestamp': ohlc_data[i]['timestamp']
-            })
-        
-        # Check for swing low (similar logic)
-        # ... implementation
+    # Detect local maxima and minima
+    swing_high_indices = argrelextrema(highs, np.greater, order=min_bars)[0]
+    swing_low_indices = argrelextrema(lows, np.less, order=min_bars)[0]
     
-    return swing_highs, swing_lows
+    swing_highs = [
+        {
+            'index': int(idx),
+            'price': float(highs[idx]),
+            'timestamp': ohlc_data.index[idx]
+        }
+        for idx in swing_high_indices
+    ]
+    
+    swing_lows = [
+        {
+            'index': int(idx),
+            'price': float(lows[idx]),
+            'timestamp': ohlc_data.index[idx]
+        }
+        for idx in swing_low_indices
+    ]
+    
+    return {
+        'swing_highs': swing_highs,
+        'swing_lows': swing_lows
+    }
 ```
 
 ## Dependencies
