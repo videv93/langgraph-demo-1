@@ -1,5 +1,6 @@
 """Unit tests for Trend Definition Agent - YTC Swing Analysis."""
 
+import pandas as pd
 import pytest
 from agent.agents.trend_definition import (
     TrendDefinition,
@@ -16,7 +17,7 @@ class TestTrendDefinitionInit:
         """Test initialization with default config."""
         agent = TrendDefinition()
         assert agent.config == {}
-        assert agent.bars == []
+        assert agent.price_df.empty
         assert agent.symbol == ""
         assert agent.timeframe == "15m"
         assert agent.htf_timeframe == "4H"
@@ -43,7 +44,7 @@ class TestTrendDefinitionInit:
             },
         }
         agent = TrendDefinition(config)
-        assert agent.bars == bars
+        assert len(agent.price_df) == len(bars)
         assert agent.symbol == "ETH-USDT"
         assert agent.timeframe == "5m"
         assert agent.htf_trend_direction == "uptrend"

@@ -7,6 +7,7 @@ Analyzes price movement strength and weakness using YTC methodology:
 """
 
 from typing import Any, TypedDict
+import pandas as pd
 
 
 class MomentumAnalysis(TypedDict, total=False):
@@ -94,8 +95,9 @@ class StrengthWeakness:
         """Initialize strength and weakness agent.
 
         Args:
-            config: Configuration with trend data, bar data, and swing information.
-                   Expected keys: trend_data, bar_data, support_resistance
+            config: Configuration with trend data, bar data (DataFrame), and swing information.
+                   Expected keys: trend_data, bar_data (with bars_df or current_bars),
+                                 support_resistance
         """
         self.config = config or {}
         self._extract_config()
@@ -117,15 +119,38 @@ class StrengthWeakness:
 
         self.prior_swings = trend_data.get("prior_swings", [])
 
-        # Bar data
+        # Bar data - accept DataFrame or list
         bar_data = self.config.get("bar_data", {})
-        self.bars = bar_data.get("current_bars", [])
+        self.bars_df = self._build_bars_dataframe(bar_data)
         self.lookback_bars = bar_data.get("lookback_bars", 20)
 
         # Support/Resistance
         sr_data = self.config.get("support_resistance", {})
         self.approaching_sr_level = sr_data.get("approaching_sr_level")
         self.level_type = sr_data.get("level_type", "none")
+
+    def _build_bars_dataframe(self, bar_data: dict) -> pd.DataFrame:
+        """Build pandas DataFrame from bar data.
+
+        Accepts either a pre-built DataFrame or list of bar dicts.
+
+        Args:
+            bar_data: Dict with bars_df (DataFrame) or current_bars (list).
+
+        Returns:
+            pandas DataFrame with bar data.
+        """
+        # If bars_df already provided, use it
+        if "bars_df" in bar_data and isinstance(bar_data["bars_df"], pd.DataFrame):
+            return bar_data["bars_df"].copy()
+
+        # Build from current_bars list (legacy support)
+        current_bars = bar_data.get("current_bars", [])
+        if not current_bars:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(current_bars)
+        return df
 
     def execute(self) -> StrengthWeaknessOutput:
         """Execute strength and weakness analysis.
@@ -183,7 +208,7 @@ class StrengthWeakness:
         Returns:
             MomentumAnalysis with score, rating, and details.
         """
-        if not self.bars:
+        if self.bars_df.empty:
             return {
                 "score": 50.0,
                 "rating": "moderate",
@@ -194,16 +219,13 @@ class StrengthWeakness:
             }
 
         # Calculate bar metrics
-        bar_sizes = []
+        bar_sizes = self.bars_df["body_size"].abs().tolist() if "body_size" in self.bars_df.columns else []
         consecutive_bars = 0
         close_quality = self._assess_close_quality()
 
-        for i, bar in enumerate(self.bars):
-            body_size = abs(bar.get("body_size", 0))
-            bar_sizes.append(body_size)
-
-            # Count consecutive bars in trend direction
-            if self._bar_in_trend_direction(bar):
+        # Count consecutive bars in trend direction
+        for idx, row in self.bars_df.iterrows():
+            if self._bar_in_trend_direction(row):
                 consecutive_bars += 1
             else:
                 consecutive_bars = 0
@@ -219,7 +241,7 @@ class StrengthWeakness:
 
         # Consecutive bars score
         consecutive_score = min(
-            100.0, (consecutive_bars / max(len(self.bars), 1)) * 100
+            100.0, (consecutive_bars / max(len(self.bars_df), 1)) * 100
         )
 
         # Acceleration score
@@ -272,12 +294,13 @@ class StrengthWeakness:
         Returns:
             "strong" | "moderate" | "weak"
         """
-        if not self.bars:
+        if self.bars_df.empty:
             return "weak"
 
         strong_closes = 0
+        last_bars = self.bars_df.tail(5)
 
-        for bar in self.bars[-5:]:  # Last 5 bars
+        for idx, bar in last_bars.iterrows():
             close_position = bar.get("close_position", "mid")  # "high" | "mid" | "low"
 
             if self.trend_direction == "up" and close_position == "high":
@@ -285,7 +308,7 @@ class StrengthWeakness:
             elif self.trend_direction == "down" and close_position == "low":
                 strong_closes += 1
 
-        ratio = strong_closes / min(5, len(self.bars))
+        ratio = strong_closes / min(5, len(self.bars_df))
 
         if ratio >= 0.6:
             return "strong"
@@ -302,18 +325,20 @@ class StrengthWeakness:
         Returns:
             Score 0-100.
         """
-        if len(self.bars) < 2:
+        if len(self.bars_df) < 2:
             return 50.0
 
-        recent_avg = sum(b.get("body_size", 0) for b in self.bars[-3:]) / min(
-            3, len(self.bars)
-        )
-        prior_avg = (
-            sum(b.get("body_size", 0) for b in self.bars[-6:-3])
-            / min(3, len(self.bars) - 3)
-            if len(self.bars) >= 6
-            else recent_avg
-        )
+        if "body_size" not in self.bars_df.columns:
+            return 50.0
+
+        recent_bars = self.bars_df.tail(3)
+        recent_avg = recent_bars["body_size"].sum() / len(recent_bars)
+
+        if len(self.bars_df) >= 6:
+            prior_bars = self.bars_df.iloc[-6:-3]
+            prior_avg = prior_bars["body_size"].sum() / len(prior_bars)
+        else:
+            prior_avg = recent_avg
 
         if prior_avg == 0:
             return 50.0
@@ -364,7 +389,7 @@ class StrengthWeakness:
 
         # Get current swing distance
         current_swing = self.current_swing
-        current_price = self.bars[-1].get("close", 0) if self.bars else 0
+        current_price = float(self.bars_df.iloc[-1]["close"]) if not self.bars_df.empty else 0
 
         # Calculate current projection distance
         swing_price = current_swing.get("price", 0)
@@ -483,7 +508,7 @@ class StrengthWeakness:
         Returns:
             Retracement ratio (0-1.0+) or None if no pullback detected.
         """
-        if len(self.bars) < 3 or not self.prior_swings:
+        if len(self.bars_df) < 3 or not self.prior_swings:
             return None
 
         # Identify if we're in a pullback (moving against trend)
@@ -492,10 +517,10 @@ class StrengthWeakness:
 
         if self.trend_direction == "up":
             # In uptrend, pullback is downward move
-            pullback_extreme = min(b.get("low", float("inf")) for b in self.bars[-5:])
+            pullback_extreme = float(self.bars_df.tail(5)["low"].min())
         else:
             # In downtrend, pullback is upward move
-            pullback_extreme = max(b.get("high", float("-inf")) for b in self.bars[-5:])
+            pullback_extreme = float(self.bars_df.tail(5)["high"].max())
 
         # Get swing reference points
         if not self.prior_swings:
@@ -623,11 +648,14 @@ class StrengthWeakness:
         Returns:
             True if rejection bars detected in last 3 bars.
         """
-        if len(self.bars) < 3:
+        if len(self.bars_df) < 3:
             return False
 
-        for bar in self.bars[-3:]:
-            body_ratio = bar.get("body_size", 0) / (bar.get("bar_range", 1) or 1)
+        last_bars = self.bars_df.tail(3)
+        for idx, bar in last_bars.iterrows():
+            body_size = bar.get("body_size", 0)
+            bar_range = bar.get("bar_range", 1) or 1
+            body_ratio = body_size / bar_range
             wick_type = bar.get("wick_type", "none")
 
             # Rejection: small body + large wick
@@ -646,20 +674,17 @@ class StrengthWeakness:
             True if momentum divergence detected.
         """
         # Divergence: weak momentum score but continuation in trend direction
-        if momentum_analysis["score"] < 40 and len(self.bars) >= 5:
+        if momentum_analysis["score"] < 40 and len(self.bars_df) >= 5:
             # Check if price still made new extremes despite weak momentum
-            recent_bars = self.bars[-5:]
+            recent_bars = self.bars_df.tail(5)
 
             if self.trend_direction == "up":
-                made_new_high = any(
-                    b.get("high", 0) > self.bars[-6].get("high", 0) for b in recent_bars
-                )
+                prior_high = float(self.bars_df.iloc[-6]["high"]) if len(self.bars_df) >= 6 else 0
+                made_new_high = (recent_bars["high"].max() > prior_high)
                 return made_new_high and momentum_analysis["score"] < 30
             else:
-                made_new_low = any(
-                    b.get("low", 0) < self.bars[-6].get("low", float("inf"))
-                    for b in recent_bars
-                )
+                prior_low = float(self.bars_df.iloc[-6]["low"]) if len(self.bars_df) >= 6 else float("inf")
+                made_new_low = (recent_bars["low"].min() < prior_low)
                 return made_new_low and momentum_analysis["score"] < 30
 
         return False

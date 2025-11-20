@@ -7,6 +7,7 @@ Determines uptrend (HH + HL), downtrend (LH + LL), or sideways movement.
 from datetime import datetime
 from enum import Enum
 from typing import Any, TypedDict
+import pandas as pd
 
 
 class TrendDirection(str, Enum):
@@ -98,8 +99,8 @@ class TrendDefinition:
         """Initialize trend definition agent.
 
         Args:
-            config: Configuration with bars, HTF context, and analysis parameters.
-                   Expected keys: market_data (with bars list),
+            config: Configuration with price_df (DataFrame), HTF context, and analysis parameters.
+                   Expected keys: market_data (with price_df DataFrame),
                                  higher_timeframe_context
         """
         self.config = config or {}
@@ -109,7 +110,15 @@ class TrendDefinition:
         """Extract configuration parameters."""
         # Market data
         market_data = self.config.get("market_data", {})
-        self.bars = market_data.get("bars", [])
+        
+        # Accept either price_df or bars (legacy support)
+        if "price_df" in market_data and isinstance(market_data["price_df"], pd.DataFrame):
+            self.price_df = market_data["price_df"].copy()
+        else:
+            # Convert bars list to DataFrame
+            bars = market_data.get("bars", [])
+            self.price_df = self._build_dataframe(bars)
+            
         self.symbol = market_data.get("symbol", "")
         self.timeframe = market_data.get("timeframe", "15m")
 
@@ -121,6 +130,32 @@ class TrendDefinition:
         self.htf_support = htf_context.get("htf_support", 0.0)
         self.htf_swing_high = htf_context.get("htf_swing_high", 0.0)
         self.htf_swing_low = htf_context.get("htf_swing_low", 0.0)
+
+    def _build_dataframe(self, bars: list[dict]) -> pd.DataFrame:
+        """Convert bars list to pandas DataFrame.
+
+        Args:
+            bars: List of bar dicts with OHLC and metadata.
+
+        Returns:
+            pandas DataFrame with columns: open, high, low, close, timestamp, bar_index
+        """
+        if not bars:
+            return pd.DataFrame(columns=["open", "high", "low", "close", "timestamp", "bar_index"])
+
+        data = []
+        for i, bar in enumerate(bars):
+            data.append({
+                "open": float(bar.get("open", 0)),
+                "high": float(bar.get("high", 0)),
+                "low": float(bar.get("low", 0)),
+                "close": float(bar.get("close", 0)),
+                "timestamp": bar.get("timestamp", ""),
+                "bar_index": i,
+            })
+
+        df = pd.DataFrame(data)
+        return df
 
     def execute(self) -> TrendDefinitionOutput:
         """Execute YTC trend definition analysis.
@@ -197,23 +232,21 @@ class TrendDefinition:
         """
         swings: list[Swing] = []
 
-        if len(self.bars) < 3:
+        if len(self.price_df) < 3:
             return swings
 
-        for i in range(1, len(self.bars) - 1):
-            current = self.bars[i]
-            prev = self.bars[i - 1]
-            next_bar = self.bars[i + 1]
+        for i in range(1, len(self.price_df) - 1):
+            current = self.price_df.iloc[i]
+            prev = self.price_df.iloc[i - 1]
+            next_bar = self.price_df.iloc[i + 1]
 
             # Swing high: current high > both neighbors
-            if current.get("high", 0) > prev.get("high", 0) and current.get(
-                "high", 0
-            ) > next_bar.get("high", 0):
+            if current["high"] > prev["high"] and current["high"] > next_bar["high"]:
                 swings.append(
                     {
                         "type": "swing_high",
-                        "price": current.get("high", 0),
-                        "timestamp": current.get("timestamp", ""),
+                        "price": float(current["high"]),
+                        "timestamp": str(current.get("timestamp", "")),
                         "bar_index": i,
                         "is_leading": False,
                         "is_broken": False,
@@ -221,14 +254,12 @@ class TrendDefinition:
                 )
 
             # Swing low: current low < both neighbors
-            elif current.get("low", 0) < prev.get("low", 0) and current.get(
-                "low", 0
-            ) < next_bar.get("low", 0):
+            elif current["low"] < prev["low"] and current["low"] < next_bar["low"]:
                 swings.append(
                     {
                         "type": "swing_low",
-                        "price": current.get("low", 0),
-                        "timestamp": current.get("timestamp", ""),
+                        "price": float(current["low"]),
+                        "timestamp": str(current.get("timestamp", "")),
                         "bar_index": i,
                         "is_leading": False,
                         "is_broken": False,
@@ -382,14 +413,14 @@ class TrendDefinition:
 
         # Check if leading swing is broken
         leading_sh, leading_sl = self._get_leading_swings(swings)
-
-        if self.bars:
-            current_price = self.bars[-1].get("close", 0)
-
+        
+        if not self.price_df.empty:
+            current_price = float(self.price_df.iloc[-1]["close"])
+        
             # Leading swing broken indicates reversal risk
             if trend == TrendDirection.UPTREND and current_price < leading_sl:
                 return TrendStrength.REVERSAL_WARNING
-
+        
             if trend == TrendDirection.DOWNTREND and current_price > leading_sh:
                 return TrendStrength.REVERSAL_WARNING
 
@@ -524,13 +555,11 @@ class TrendDefinition:
         if len(swings) >= 2:
             inception_swing = swings[-2]  # Before last swing
             inception_timestamp = inception_swing.get("timestamp", "")
-            bar_count = self.bars[-1].get("bar_index", 0) - inception_swing.get(
-                "bar_index", 0
-            )
-
+            bar_count = len(self.price_df) - inception_swing.get("bar_index", 0)
+        
             return inception_timestamp, max(bar_count, 0)
-
-        return swings[0].get("timestamp", ""), len(self.bars)
+        
+        return swings[0].get("timestamp", ""), len(self.price_df)
 
     def _build_structure_integrity(
         self, swings: list[Swing], trend: TrendDirection, structure_breaks: int
@@ -550,13 +579,13 @@ class TrendDefinition:
 
         # Check if leading swing is broken
         leading_sh, leading_sl = self._get_leading_swings(swings)
-
-        if self.bars:
-            current_price = self.bars[-1].get("close", 0)
-
+        
+        if not self.price_df.empty:
+            current_price = float(self.price_df.iloc[-1]["close"])
+        
             if trend == TrendDirection.UPTREND and current_price < leading_sl:
                 reversal_warning = True
-
+        
             if trend == TrendDirection.DOWNTREND and current_price > leading_sh:
                 reversal_warning = True
 

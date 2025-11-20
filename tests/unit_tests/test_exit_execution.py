@@ -1,7 +1,7 @@
 """Unit tests for Exit Execution Agent - Trade exit and position closure."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from agent.agents.exit_execution import (
     ExitExecution,
     TradeResult,
@@ -866,7 +866,7 @@ class TestHummingbotIntegration:
         executor = ExitExecution(config)
 
         # Mock the fetch_current_price to return a new price
-        with pytest.mock.patch(
+        with patch(
             "agent.agents.exit_execution.fetch_current_price",
             new_callable=AsyncMock,
             return_value=105.0,
@@ -929,7 +929,7 @@ class TestHummingbotIntegration:
             "exit_time": "2025-01-01T11:00:00",
         }
 
-        with pytest.mock.patch(
+        with patch(
             "agent.agents.exit_execution.place_order",
             new_callable=AsyncMock,
             return_value={"order_id": "ORD-123", "status": "pending"},
@@ -977,7 +977,7 @@ class TestHummingbotIntegration:
             "exit_time": "2025-01-01T11:00:00",
         }
 
-        with pytest.mock.patch(
+        with patch(
             "agent.agents.exit_execution.place_order",
             new_callable=AsyncMock,
             return_value={"order_id": "ORD-124", "status": "pending"},
@@ -994,7 +994,7 @@ class TestHummingbotIntegration:
 
     @pytest.mark.asyncio
     async def test_place_exit_order_without_client(self) -> None:
-        """Test exit order placement skipped when no client."""
+        """Test exit order placement returns mock order in demo mode."""
         position = {
             "trade_id": "TRD-HB-005",
             "entry_price": 100.0,
@@ -1022,4 +1022,7 @@ class TestHummingbotIntegration:
 
         result = await executor._place_exit_order(trade_result)
 
-        assert result is None
+        assert result is not None
+        assert "order_id" in result
+        assert result["status"] == "pending"
+        assert result["side"] == "sell"

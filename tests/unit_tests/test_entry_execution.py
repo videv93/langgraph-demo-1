@@ -1,7 +1,7 @@
 """Unit tests for Entry Execution Agent - Trade entry and position management."""
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from agent.agents.entry_execution import (
     EntryExecution,
     TradePosition,
@@ -655,7 +655,7 @@ class TestHummingbotIntegration:
         executor = EntryExecution(config)
 
         # Mock the fetch_current_price to return a new price
-        with pytest.mock.patch(
+        with patch(
             "agent.agents.entry_execution.fetch_current_price",
             new_callable=AsyncMock,
             return_value=105.0,
@@ -710,7 +710,7 @@ class TestHummingbotIntegration:
         executor = EntryExecution(config)
         position = executor._create_position(10.0)
 
-        with pytest.mock.patch(
+        with patch(
             "agent.agents.entry_execution.place_order",
             new_callable=AsyncMock,
             return_value={"order_id": "ORD-123", "status": "pending"},
@@ -750,7 +750,7 @@ class TestHummingbotIntegration:
         executor = EntryExecution(config)
         position = executor._create_position(10.0)
 
-        with pytest.mock.patch(
+        with patch(
             "agent.agents.entry_execution.place_order",
             new_callable=AsyncMock,
             return_value={"order_id": "ORD-124", "status": "pending"},
@@ -767,7 +767,7 @@ class TestHummingbotIntegration:
 
     @pytest.mark.asyncio
     async def test_place_entry_order_without_client(self) -> None:
-        """Test entry order placement skipped when no client."""
+        """Test entry order placement returns mock order in demo mode."""
         setup = {
             "type": "TST",
             "direction": "long",
@@ -787,4 +787,7 @@ class TestHummingbotIntegration:
 
         result = await executor._place_entry_order(position)
 
-        assert result is None
+        assert result is not None
+        assert result["order_id"] == position["trade_id"]
+        assert result["status"] == "pending"
+        assert result["side"] == "long"

@@ -71,16 +71,60 @@ class MarketStructure:
         Args:
             config: Optional configuration with market parameters.
                     Expected keys: instrument, timeframe, lookback_periods,
-                    current_price, ohlc_data, min_swing_bars, sr_zone_thickness_pct
+                    current_price, price_df (pandas DataFrame with OHLC data),
+                    min_swing_bars, sr_zone_thickness_pct
         """
         self.config = config or {}
         self.timeframe = self.config.get("timeframe", "4H")
         self.instrument = self.config.get("instrument", "ETH-USDT")
         self.lookback_periods = self.config.get("lookback_periods", 100)
         self.current_price = self.config.get("current_price", 0.0)
-        self.ohlc_data = self.config.get("ohlc_data", [])
+        self.price_df = self._build_dataframe()
         self.min_swing_bars = self.config.get("min_swing_bars", 3)
         self.sr_zone_thickness_pct = self.config.get("sr_zone_thickness_pct", 0.5)
+
+    def _build_dataframe(self) -> pd.DataFrame:
+        """Build pandas DataFrame from config price data.
+
+        Accepts either a pre-built DataFrame or raw OHLC data and converts it.
+
+        Returns:
+            pandas DataFrame with columns: open, high, low, close
+        """
+        # If price_df already provided, use it
+        if "price_df" in self.config and isinstance(self.config["price_df"], pd.DataFrame):
+            df = self.config["price_df"].copy()
+        else:
+            # Build from ohlc_data (legacy support)
+            ohlc_data = self.config.get("ohlc_data", [])
+            if not ohlc_data:
+                return pd.DataFrame(columns=["open", "high", "low", "close"])
+
+            data = []
+            for candle in ohlc_data:
+                if isinstance(candle, dict):
+                    data.append({
+                        "open": float(candle.get("open", 0)),
+                        "high": float(candle.get("high", 0)),
+                        "low": float(candle.get("low", 0)),
+                        "close": float(candle.get("close", 0)),
+                    })
+                elif isinstance(candle, (list, tuple)) and len(candle) >= 4:
+                    data.append({
+                        "open": float(candle[0]),
+                        "high": float(candle[1]),
+                        "low": float(candle[2]),
+                        "close": float(candle[3]),
+                    })
+
+            df = pd.DataFrame(data)
+
+        # Ensure required columns exist
+        for col in ["high", "low", "close"]:
+            if col not in df.columns:
+                df[col] = 0.0
+
+        return df.astype({"open": float, "high": float, "low": float, "close": float})
 
     def execute(self) -> MarketStructureOutput:
         """Execute market structure analysis.
@@ -88,24 +132,21 @@ class MarketStructure:
         Returns:
             MarketStructureOutput with structural framework and current context.
         """
-        # Extract price data from OHLC
-        highs, lows, closes = self._extract_price_data()
-
-        if not closes or self.current_price <= 0:
+        if self.price_df.empty or self.current_price <= 0:
             return self._empty_output()
 
         # Detect swing points using scipy
-        swing_highs, swing_lows = self._detect_swing_points(highs, lows)
+        swing_highs, swing_lows = self._detect_swing_points()
 
         # Analyze trend structure using YTC swing analysis methodology
-        trend_structure = self._analyze_trend_structure(closes, highs, lows)
+        trend_structure = self._analyze_trend_structure()
 
         # Identify support and resistance zones
         support_zones = self._calculate_zones(swing_lows, "support")
         resistance_zones = self._calculate_zones(swing_highs, "resistance")
 
         # Get prior session levels
-        prior_session = self._get_prior_session_levels(highs, lows, closes)
+        prior_session = self._get_prior_session_levels()
 
         # Calculate current context
         current_context = self._calculate_current_context(
@@ -124,47 +165,17 @@ class MarketStructure:
             "analysis_timestamp": datetime.utcnow().isoformat(),
         }
 
-    def _extract_price_data(self) -> tuple[list[float], list[float], list[float]]:
-        """Extract OHLC data from config.
-
-        Returns:
-            Tuple of (highs, lows, closes) as float lists.
-        """
-        highs = []
-        lows = []
-        closes = []
-
-        for candle in self.ohlc_data:
-            if isinstance(candle, dict):
-                highs.append(float(candle.get("high", 0)))
-                lows.append(float(candle.get("low", 0)))
-                closes.append(float(candle.get("close", 0)))
-            else:
-                # Handle array-like structure [o, h, l, c, v]
-                if len(candle) >= 4:
-                    highs.append(float(candle[1]))
-                    lows.append(float(candle[2]))
-                    closes.append(float(candle[3]))
-
-        return highs, lows, closes
-
-    def _detect_swing_points(
-        self, highs: list[float], lows: list[float]
-    ) -> tuple[list[dict], list[dict]]:
+    def _detect_swing_points(self) -> tuple[list[dict], list[dict]]:
         """Detect swing highs and lows using scipy.signal.argrelextrema.
-
-        Args:
-            highs: List of high prices.
-            lows: List of low prices.
 
         Returns:
             Tuple of (swing_highs, swing_lows) as list of dicts.
         """
-        if len(highs) < self.min_swing_bars * 2 + 1:
+        if len(self.price_df) < self.min_swing_bars * 2 + 1:
             return [], []
 
-        highs_array = np.array(highs)
-        lows_array = np.array(lows)
+        highs_array = self.price_df["high"].values.astype(np.float64)
+        lows_array = self.price_df["low"].values.astype(np.float64)
 
         # Find local maxima and minima
         swing_high_indices = argrelextrema(
@@ -177,7 +188,7 @@ class MarketStructure:
         swing_highs = [
             {
                 "index": int(idx),
-                "price": float(highs[idx]),
+                "price": float(highs_array[idx]),
             }
             for idx in swing_high_indices
         ]
@@ -185,16 +196,14 @@ class MarketStructure:
         swing_lows = [
             {
                 "index": int(idx),
-                "price": float(lows[idx]),
+                "price": float(lows_array[idx]),
             }
             for idx in swing_low_indices
         ]
 
         return swing_highs, swing_lows
 
-    def _analyze_trend_structure(
-        self, closes: list[float], highs: list[float] = None, lows: list[float] = None
-    ) -> TrendDirection:
+    def _analyze_trend_structure(self) -> TrendDirection:
         """Determine trend structure using YTC swing analysis methodology.
 
         Classifies trend based on swing patterns:
@@ -202,66 +211,35 @@ class MarketStructure:
         - Downtrend: Series of lower highs (LH) and lower lows (LL)
         - Sideways: No clear directional pattern
 
-        Args:
-            closes: List of closing prices.
-            highs: List of high prices (optional, extracted from ohlc_data if not provided).
-            lows: List of low prices (optional, extracted from ohlc_data if not provided).
-
         Returns:
             TrendDirection enum value (UPTREND, DOWNTREND, or SIDEWAYS).
         """
-        if len(closes) < 5:
+        if len(self.price_df) < 5:
             return TrendDirection.SIDEWAYS
 
-        # Extract highs and lows if not provided
-        if highs is None or lows is None:
-            highs, lows, _ = self._extract_price_data()
-
-        if len(highs) < 5 or len(lows) < 5:
-            return TrendDirection.SIDEWAYS
-
-        # Detect swing points using scipy (same method as used elsewhere)
-        swing_highs, swing_lows = self._detect_swing_points(highs, lows)
+        # Detect swing points
+        swing_highs, swing_lows = self._detect_swing_points()
 
         if len(swing_highs) < 2 or len(swing_lows) < 2:
             return TrendDirection.SIDEWAYS
 
-        # Extract last 4 swings to analyze pattern
-        recent_swings = []
-
-        # Get indices of recent swing highs and lows
-        for sh in swing_highs[-3:]:
-            recent_swings.append(("high", sh["index"], sh["price"]))
-        for sl in swing_lows[-3:]:
-            recent_swings.append(("low", sl["index"], sl["price"]))
-
-        # Sort by index to get chronological order
-        recent_swings.sort(key=lambda x: x[1])
-
-        if len(recent_swings) < 4:
-            return TrendDirection.SIDEWAYS
-
-        # Analyze last 3 swings to determine trend pattern
-        last_3_swings = recent_swings[-3:]
-
-        # Check for uptrend pattern: HH and HL (recent swing high > prior swing high, recent swing low > prior swing low)
+        # Check for uptrend pattern: HH and HL
         uptrend_pattern = False
         downtrend_pattern = False
 
-        if len(swing_highs) >= 2 and len(swing_lows) >= 2:
-            # Get last two swing highs and lows
-            last_sh = swing_highs[-1]["price"]
-            prev_sh = swing_highs[-2]["price"] if len(swing_highs) >= 2 else 0
-            last_sl = swing_lows[-1]["price"]
-            prev_sl = swing_lows[-2]["price"] if len(swing_lows) >= 2 else 0
+        # Get last two swing highs and lows
+        last_sh = swing_highs[-1]["price"]
+        prev_sh = swing_highs[-2]["price"]
+        last_sl = swing_lows[-1]["price"]
+        prev_sl = swing_lows[-2]["price"]
 
-            # Uptrend: HH and HL
-            if last_sh > prev_sh and last_sl > prev_sl:
-                uptrend_pattern = True
+        # Uptrend: HH and HL
+        if last_sh > prev_sh and last_sl > prev_sl:
+            uptrend_pattern = True
 
-            # Downtrend: LH and LL
-            if last_sh < prev_sh and last_sl < prev_sl:
-                downtrend_pattern = True
+        # Downtrend: LH and LL
+        if last_sh < prev_sh and last_sl < prev_sl:
+            downtrend_pattern = True
 
         # Determine trend direction
         if uptrend_pattern:
@@ -311,7 +289,7 @@ class MarketStructure:
         return sorted(zones, key=lambda z: z["level"])
 
     def _count_touches(self, level: float, thickness: float) -> int:
-        """Count how many times price touched a zone using pandas.
+        """Count how many times price touched a zone.
 
         Args:
             level: Zone center level.
@@ -320,43 +298,32 @@ class MarketStructure:
         Returns:
             Number of touches.
         """
-        if not self.ohlc_data:
+        if self.price_df.empty:
             return 0
 
-        closes = [
-            float(c.get("close", 0) if isinstance(c, dict) else c[3])
-            for c in self.ohlc_data
-        ]
-
-        # Convert to pandas Series for vectorized comparison
-        close_series = pd.Series(closes)
+        # Vectorized comparison using pandas
         touches = (
-            (close_series >= level - thickness) & (close_series <= level + thickness)
+            (self.price_df["close"] >= level - thickness) &
+            (self.price_df["close"] <= level + thickness)
         ).sum()
 
         return int(touches)
 
-    def _get_prior_session_levels(
-        self, highs: list[float], lows: list[float], closes: list[float]
-    ) -> dict[str, float]:
+    def _get_prior_session_levels(self) -> dict[str, float]:
         """Get prior session's high, low, and close.
-
-        Args:
-            highs: List of high prices.
-            lows: List of low prices.
-            closes: List of close prices.
 
         Returns:
             Dict with prior_high, prior_low, prior_close.
         """
-        if len(closes) < 2:
+        if len(self.price_df) < 2:
             return {"high": 0.0, "low": 0.0, "close": 0.0}
 
         # Use previous candle as "prior session"
+        prior = self.price_df.iloc[-2]
         return {
-            "high": round(highs[-2], 2) if len(highs) >= 2 else 0.0,
-            "low": round(lows[-2], 2) if len(lows) >= 2 else 0.0,
-            "close": round(closes[-2], 2) if len(closes) >= 2 else 0.0,
+            "high": round(float(prior["high"]), 2),
+            "low": round(float(prior["low"]), 2),
+            "close": round(float(prior["close"]), 2),
         }
 
     def _calculate_current_context(
@@ -428,19 +395,16 @@ class MarketStructure:
             "analysis_timestamp": datetime.utcnow().isoformat(),
         }
 
-    def calculate_indicators(self, closes: list[float]) -> dict[str, float]:
+    def calculate_indicators(self) -> dict[str, float]:
         """Calculate additional technical indicators using talib.
-
-        Args:
-            closes: List of closing prices.
 
         Returns:
             Dict with indicator values (RSI, MACD, Bollinger Bands).
         """
-        if len(closes) < 14:
+        if len(self.price_df) < 14:
             return {}
 
-        close_array = np.array(closes, dtype=np.float64)
+        close_array = self.price_df["close"].values.astype(np.float64)
 
         indicators = {}
 

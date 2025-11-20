@@ -152,10 +152,12 @@ class TestSystemInitializationExchange:
 class TestSystemInitializationBalance:
     """Test account balance fetching."""
 
-    def test_fetch_account_balance_no_client(self) -> None:
+    @pytest.mark.asyncio
+    async def test_fetch_account_balance_no_client(self) -> None:
         """Test balance fetch returns 0 without Hummingbot client."""
         agent = SystemInitialization()
-        assert agent._fetch_account_balance() == 0.0
+        result = await agent._fetch_account_balance()
+        assert result == 0.0
 
     @pytest.mark.asyncio
     async def test_get_balance_async_with_valid_state(self) -> None:
@@ -164,8 +166,8 @@ class TestSystemInitializationBalance:
         portfolio_state = {
             "account_1": {
                 "binance": [
-                    {"asset": "USDT", "free": 100.0},
-                    {"asset": "ETH", "free": 1.0},
+                    {"token": "USDT", "available_units": 100.0},
+                    {"token": "ETH", "available_units": 1.0},
                 ],
             },
         }
@@ -183,10 +185,10 @@ class TestSystemInitializationBalance:
         mock_client = MagicMock()
         portfolio_state = {
             "account_1": {
-                "binance": [{"asset": "USDT", "free": 100.0}],
+                "binance": [{"token": "USDT", "available_units": 100.0}],
             },
             "account_2": {
-                "kucoin": [{"asset": "USDT", "free": 50.0}],
+                "kucoin": [{"token": "USDT", "available_units": 50.0}],
             },
         }
         mock_client.portfolio.get_state = AsyncMock(return_value=portfolio_state)

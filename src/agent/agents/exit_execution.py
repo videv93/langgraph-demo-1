@@ -235,7 +235,16 @@ class ExitExecution:
             Order result dictionary or None if placement failed.
         """
         if not self.hummingbot_client:
-            return None
+            # Return mock order result for demo/test mode
+            entry_type = self.open_position.get("entry_type", "long")
+            exit_side = "sell" if entry_type == "long" else "buy"
+            return {
+                "order_id": f"ORD-{trade_result['trade_id']}",
+                "status": "pending",
+                "side": exit_side,
+                "quantity": trade_result["position_size"],
+                "price": trade_result["exit_price"]
+            }
 
         # Determine exit side (opposite of entry)
         entry_type = self.open_position.get("entry_type", "long")

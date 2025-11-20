@@ -284,3 +284,52 @@ class EconomicCalendar:
         return (
             "✓ Only medium-impact events upcoming. Monitor but proceed with caution."
         )
+
+    def _get_mock_events(self) -> list[EconomicEvent]:
+        """Get mock economic events for testing purposes.
+
+        Returns:
+            List of mock economic events.
+        """
+        return [
+            {
+                "event_name": "Unemployment Rate",
+                "impact": EventImpact.HIGH,
+                "time_until_event": 2.5,
+                "forecast": "3.7%",
+                "previous": "3.6%",
+                "currency": "USD",
+            },
+            {
+                "event_name": "Core Inflation Rate",
+                "impact": EventImpact.HIGH,
+                "time_until_event": 5.0,
+                "forecast": "2.3%",
+                "previous": "2.4%",
+                "currency": "USD",
+            },
+            {
+                "event_name": "ECB Interest Rate Decision",
+                "impact": EventImpact.HIGH,
+                "time_until_event": 8.5,
+                "forecast": "3.50%",
+                "previous": "3.50%",
+                "currency": "EUR",
+            },
+            {
+                "event_name": "Retail Sales",
+                "impact": EventImpact.MEDIUM,
+                "time_until_event": 10.5,
+                "forecast": "0.5%",
+                "previous": "-0.2%",
+                "currency": "USD",
+            },
+            {
+                "event_name": "GDP Growth Rate",
+                "impact": EventImpact.MEDIUM,
+                "time_until_event": 11.5,
+                "forecast": "2.1%",
+                "previous": "2.0%",
+                "currency": "GBP",
+            },
+        ]

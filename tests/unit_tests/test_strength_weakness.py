@@ -1,5 +1,6 @@
 """Unit tests for Strength & Weakness Analysis Agent - YTC Price Action."""
 
+import pandas as pd
 import pytest
 from agent.agents.strength_weakness import (
     StrengthWeakness,
@@ -19,7 +20,7 @@ class TestStrengthWeaknessInit:
         agent = StrengthWeakness()
         assert agent.config == {}
         assert agent.trend_direction == "up"
-        assert agent.bars == []
+        assert agent.bars_df.empty
         assert agent.lookback_bars == 20
 
     def test_init_custom_config(self) -> None:
@@ -40,7 +41,7 @@ class TestStrengthWeaknessInit:
         config = {"trend_data": {"direction": "sideways"}}
         agent = StrengthWeakness(config)
         assert agent.trend_direction == "sideways"
-        assert agent.bars == []
+        assert agent.bars_df.empty
 
 
 class TestMomentumAnalysis:

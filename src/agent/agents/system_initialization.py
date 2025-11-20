@@ -42,12 +42,16 @@ class SystemInitialization:
         self.timestamp = datetime.now(UTC).isoformat()
         self.account_balance = 0.0
         self.hummingbot_client = config.get("hummingbot_client") if config else None
+        self.hummingbot_host = config.get("hummingbot_host", "localhost") if config else "localhost"
+        self.hummingbot_port = config.get("hummingbot_port", 8000) if config else 8000
+        self.hummingbot_username = config.get("hummingbot_username") if config else None
+        self.hummingbot_password = config.get("hummingbot_password") if config else None
         self.exchange = config.get("exchange", "binance") if config else "binance"
         self.trading_pair = (
             config.get("trading_pair", "ETH-USDT") if config else "ETH-USDT"
         )
 
-    async def execute(self) -> SystemInitializationOutput:
+    def execute(self) -> SystemInitializationOutput:
         """Execute system initialization with Hummingbot integration.
 
         Returns:
@@ -80,8 +84,13 @@ class SystemInitialization:
                     f"Trading pair {self.trading_pair} not available on {self.exchange}"
                 )
 
-            # Fetch account balance from Hummingbot
-            self.account_balance = await self._fetch_account_balance()
+            # Fetch account balance from Hummingbot (synchronously for non-async execute)
+            try:
+                import asyncio
+                self.account_balance = asyncio.run(self._fetch_account_balance())
+            except Exception:
+                errors.append("Failed to fetch account balance from Hummingbot")
+            
             if self.account_balance <= 0:
                 errors.append("Failed to fetch account balance from Hummingbot")
             elif self.account_balance < 100.0:
@@ -153,6 +162,11 @@ class SystemInitialization:
         }
 
         try:
+            # Check if credentials are provided
+            if not self.hummingbot_username or not self.hummingbot_password:
+                exchange_info["error"] = "credentials not provided"
+                return exchange_info
+
             # In production, would call Hummingbot API to validate exchange connection
             # Example: requests.get(
             #     f"http://{self.hummingbot_host}:{self.hummingbot_port}/api/exchange/{self.exchange}/status",
