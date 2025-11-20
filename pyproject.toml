@@ -18,6 +18,7 @@ dependencies = [
     "numpy>=1.26.0",
     "pandas>=2.0.0",
     "TA-Lib>=0.4.28",
+    "pinecone-client>=3.0.0",
 ]
 
 
